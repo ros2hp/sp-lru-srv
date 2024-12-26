@@ -78,7 +78,7 @@ impl RNode {
         let projection =  types::CNT.to_string() 
                           + "," + types::OVB
                           + "," + types::OVB_BID 
-                          + "," + types::OVB_ID 
+                          //+ "," + types::OVB_ID 
                           + "," + types::OVB_CUR 
                           + "," + types::OVB_CNT;
         let result = dyn_client
@@ -157,7 +157,7 @@ impl From<HashMap<String, AttributeValue>> for RNode {
                 types::OVB => edge.ovb = types::as_luuid(v).unwrap(),
                 types::OVB_CNT => edge.obcnt = types::as_u32_2(v).unwrap() as usize,
                 types::OVB_BID => edge.obid = types::as_lu32(v).unwrap(),
-                types::OVB_ID => edge.oid = types::as_lu32(v).unwrap(),
+                //types::OVB_ID => edge.oid = types::as_lu32(v).unwrap(),
                 types::OVB_CUR => edge.ocur = types::as_u8_2(v),
                 _ => panic!(
                     "unexpected attribute in HashMap for RNode: [{}]",

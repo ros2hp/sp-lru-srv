@@ -7,27 +7,29 @@ use tokio::task;
 #[derive(Eq, Hash, PartialEq, Debug)]
 pub enum Event {
     // mutex waits
-    LRU_Mutex,
-    Cache_Mutex,
+    LRUmutex,
+    CacheMutex,
     // channel waits
-    LRU_Send_Attach,
-    LRU_Send_Move, 
-    Evict_Wait,
-    Chan_Persist_Query,
-    Chan_Persist_Query_Resp,
-    Chan_Persist_Wait,
-    Task_Send,
-    Task_Recv,
-    Task_Remain_Recv,
+    LRUSendAttach,
+    LRUSendMove, 
+    EvictWait,
+    ChanPersistQuery,
+    ChanPersistQueryResp,
+    ChanPersistWait,
+    TaskSend,
+    TaskRecv,
+    TaskRemainRecv,
     // Operations
-    Move_to_Head,
+    MoveToHead,
     Attach,
     // Dynamodb
-    Get_Item,
-    Persist_Embedded,
-    Persist_ovb_set,
-    Persist_ovb_append,
-    Persist_meta,
+    GetItem,
+    PersistEmbedded,
+    PersistOvbSet,
+    PersistOvbAppend,
+    PersistMeta,
+    // Cache
+    LruEvictCacheLock
 }
 
 #[derive(Clone)]
@@ -73,7 +75,7 @@ impl Waits {
 // }
 
 pub fn start_service(mut stats_rx : tokio::sync::mpsc::Receiver<(Event, Duration, Duration)>
-                    ,mut close_service_rx :tokio::sync::mpsc::Receiver<bool>
+                    ,mut shutdown_rx : tokio::sync::broadcast::Receiver<u8>
 ) -> task::JoinHandle<()> {
 
     println!("STATS: start stats service....");
@@ -94,7 +96,7 @@ pub fn start_service(mut stats_rx : tokio::sync::mpsc::Receiver<(Event, Duration
 
                 // Stats does not respond to shutdown broadcast rather it is synchronised with 
                 // Persist shutdown.
-                _ = close_service_rx.recv() => {
+                _ = shutdown_rx.recv() => {
                     println!("STATS: Shutdown stats service....");
                     // ==========================
                     // close channel - then drain
@@ -146,5 +148,3 @@ pub fn start_service(mut stats_rx : tokio::sync::mpsc::Receiver<(Event, Duration
 
     stats_server
 }
-
-

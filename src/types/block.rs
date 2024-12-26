@@ -68,7 +68,7 @@ pub const TARGET_ID: &str = "Target_id";
 // Reverse edge Overflow metadata - stored with child reverse edge only when OvB used
 //pub const OVB : &str = "OVB";     // List of UUIDs for OvBs
 pub const OVB_BID: &str = "OBID"; // List of current Batch ID in each OvB
-pub const OVB_ID: &str = "OID"; // List of current index for each Batch
+//pub const OVB_ID: &str = "OID"; // List of current index for each Batch
 pub const OVB_CUR: &str = "OCUR"; // ovb last used
 pub const OVB_CNT: &str = "OCNT"; // cnt in current overflow batch in current ovb
 

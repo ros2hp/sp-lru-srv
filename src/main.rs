@@ -42,7 +42,7 @@ use tokio::time::{sleep, Duration, Instant};
 //use tokio::task::spawn;
 
 const DYNAMO_BATCH_SIZE: usize = 25;
-const MAX_SP_TASKS : usize = 4;
+const MAX_SP_TASKS : usize = 28;
 pub const LRU_CAPACITY : usize = 60;
 
 const LS: u8 = 1;
@@ -61,7 +61,7 @@ const _LDT: u8 = 5;
 // node with substantial scalar data this parameter should be corresponding small (< 5) to minimise the space consumed
 // within the parent block. The more space consumed by the embedded child node data the more RCUs required to read the parent RNode data,
 // which will be an overhead in circumstances where child data is not required.
-const EMBEDDED_CHILD_NODES: usize = 100; //10; // prod value: 20
+const EMBEDDED_CHILD_NODES: usize = 50; //10; // prod value: 20
 
 // MAX_OV_BLOCKS - max number of overflow blocks. Set to the desired number of concurrent reads on overflow blocks ie. the degree of parallelism required. Prod may have upto 100.
 // As each block resides in its own UUID (PKey) there shoud be little contention when reading them all in parallel. When max is reached the overflow
@@ -72,7 +72,7 @@ const MAX_OV_BLOCKS: usize = 5; // prod value : 100
 // OV_MAX_BATCH_SIZE - number of items to an overflow batch. Always fixed at this value.
 // The limit is checked using the database SIZE function during insert of the child data into the overflow block.
 // An overflow block has an unlimited number of batches.
-const OV_MAX_BATCH_SIZE: usize = 150; //15; // Prod 100 to 500.
+const OV_MAX_BATCH_SIZE: usize = 217; //15; // Prod 100 to 500.
 
 // OV_BATCH_THRESHOLD, initial number of batches in an overflow block before creating new Overflow block.
 // Once all overflow blocks have been created (MAX_OV_BLOCKS), blocks are randomly chosen and each block
@@ -226,21 +226,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
     
     let cache = ReverseCache::new(); 
     //let lru_evict = lru::LRUevict::new(LRU_CAPACITY, persist_submit_ch.clone(), lru_client_ch, lru_client_rx);
+        // ====================
+    // start Waits service
+    // ====================
+    let (stats_ch, mut stats_rx) = tokio::sync::mpsc::channel::<(service::stats::Event, Duration, Duration)>(MAX_SP_TASKS*10); 
+    let stats_shutdown_ch = shutdown_broadcast_sender.subscribe();
+    let waits = service::stats::Waits::new(stats_ch);
+
+    let stats_service = service::stats::start_service(stats_rx, stats_shutdown_ch);
     // =====================
     // 4. start lru service 
     // ===================== 
     let (lru_ch_p, mut lru_operation_rx) = tokio::sync::mpsc::channel::<(usize, RKey, Instant,tokio::sync::mpsc::Sender<bool>, lru::LruAction)>(MAX_SP_TASKS);
     let (lru_flush_ch, lru_flush_rx) = tokio::sync::mpsc::channel::<tokio::sync::mpsc::Sender<()>>(1);
     
-    let lru_service = service::lru::start_service(LRU_CAPACITY, cache.clone(), lru_operation_rx, lru_flush_rx, lru_persist_submit_ch); 
-    // ====================
-    // start Waits service
-    // ====================
-    let (stats_ch, mut stats_rx) = tokio::sync::mpsc::channel::<(service::stats::Event, Duration, Duration)>(MAX_SP_TASKS*10); 
-    let (close_stats_service_ch, mut close_service_rx) = tokio::sync::mpsc::channel::<bool>(1); 
-    let waits = service::stats::Waits::new(stats_ch);
-
-    let stats_service = service::stats::start_service(stats_rx, close_service_rx);
+    let lru_service = service::lru::start_service(LRU_CAPACITY, cache.clone(), lru_operation_rx, lru_flush_rx, lru_persist_submit_ch, waits.clone()); 
 
     // ================================================
     // 3. start persist service
@@ -256,7 +256,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
         persist_submit_rx,
         persist_query_rx,
         pre_shutdown_rx,
-        close_stats_service_ch,
         persist_shutdown_ch,
         waits.clone(),
     );
@@ -1108,7 +1107,7 @@ async fn fetch_p_edge_meta<'a, T: Into<String>>(
         .projection_expression(proj)
         .send()
         .await;
-    waits.record(Event::Get_Item, Instant::now().duration_since(before)).await;
+    waits.record(Event::GetItem, Instant::now().duration_since(before)).await;
 
     if let Err(err) = result {
         panic!(

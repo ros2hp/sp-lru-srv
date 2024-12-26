@@ -57,7 +57,11 @@ impl RKey {
                 cache_guard.0.insert(self.clone(), arc_rnode.clone());
                 let mut rnode_guard = arc_rnode.lock().await;
                 drop(cache_guard);
-
+                // ======================
+                // IS NODE BEING PERSISTED 
+                // ======================
+                self.wait_if_evicted(task, persist_query_ch, persist_client_send_ch, persist_srv_resp_rx, waits.clone()).await;
+              
                 rnode_guard.load_OvB_metadata(dyn_client, table_name, self, task).await;
                 rnode_guard.add_reverse_edge(target.clone(), bid as u32, id as u32);
                 //
@@ -65,7 +69,7 @@ impl RKey {
                 if let Err(err) = lru_ch.send((task, self.clone(), before, client_ch, LruAction::Attach)).await {
                     panic!("Send on lru_attach_ch errored: {}", err);
                 }   
-                waits.record(Event::LRU_Send_Attach,Instant::now().duration_since(before)).await;    
+                waits.record(Event::LRUSendAttach,Instant::now().duration_since(before)).await;    
                 // sync'd: wait for operation to complete - just like using a mutex is synchronous with operation.
                 let _ = srv_resp_rx.recv().await;
                 waits.record(Event::Attach,Instant::now().duration_since(before)).await; 
@@ -88,6 +92,7 @@ impl RKey {
                     // if so, must wait for the evict-persist process to complete - setup comms with persist.
                     println!("{} RKEY: node read from cache but detected it has been evicted....{:?}",task, self);
                     self.wait_if_evicted(task, persist_query_ch, persist_client_send_ch, persist_srv_resp_rx, waits.clone()).await;
+
                     // load node from database and attach to LRU
                     rnode_guard.load_OvB_metadata(dyn_client, table_name, self, task).await;
                     rnode_guard.add_reverse_edge(target.clone(), bid as u32, id as u32);
@@ -96,7 +101,7 @@ impl RKey {
                     if let Err(err)= lru_ch.send((task, self.clone(), before, client_ch, LruAction::Attach)).await {
                         panic!("Send on lru_attach_ch failed {}",err)
                     };
-                    waits.record(Event::LRU_Send_Attach,Instant::now().duration_since(before)).await;
+                    waits.record(Event::LRUSendAttach,Instant::now().duration_since(before)).await;
                     let _ = srv_resp_rx.recv().await;
                     waits.record(Event::Attach,Instant::now().duration_since(before)).await; 
 
@@ -111,9 +116,9 @@ impl RKey {
                     if let Err(err) = lru_ch.send((task, self.clone(), before, client_ch, LruAction::Move_to_head)).await {
                         panic!("Send on lru_move_to_head_ch failed {}",err)
                     };
-                    waits.record(Event::LRU_Send_Move,Instant::now().duration_since(before)).await; 
+                    waits.record(Event::LRUSendMove,Instant::now().duration_since(before)).await; 
                     let _ = srv_resp_rx.recv().await;
-                    waits.record(Event::Move_to_Head,Instant::now().duration_since(before)).await; 
+                    waits.record(Event::MoveToHead,Instant::now().duration_since(before)).await; 
                 }
             }
         }
@@ -138,7 +143,7 @@ impl RKey {
                                 {
                                     panic!("evict channel comm failed = {}", e);
                                 }
-                waits.record(Event::Chan_Persist_Query,Instant::now().duration_since(before)).await;
+                waits.record(Event::ChanPersistQuery,Instant::now().duration_since(before)).await;
  
                 // wait for persist to complete
                 before =Instant::now();
@@ -150,7 +155,7 @@ impl RKey {
                         
                     }
                     };
-                waits.record(Event::Chan_Persist_Query_Resp,Instant::now().duration_since(before)).await;
+                waits.record(Event::ChanPersistQueryResp,Instant::now().duration_since(before)).await;
               
                 //println!("{} RKEY add_reverse_edge: node eviced FINISHED waiting - recv'd ACK from PERSIT {:?}", task, self);
                 if persist_resp {
@@ -160,7 +165,7 @@ impl RKey {
                     println!("{} wait_if_evicted entered...wait for io to complete...",task);
                     before =Instant::now();
                     persist_srv_resp_rx.recv().await;
-                    waits.record(Event::Chan_Persist_Wait,Instant::now().duration_since(before)).await;
+                    waits.record(Event::ChanPersistWait,Instant::now().duration_since(before)).await;
                 }
                 println!("{} wait_if_evicted entered...EXIT",task);
     }

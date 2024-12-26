@@ -3,6 +3,7 @@ use super::*;
 use crate::rkey::RKey;
 use crate::node::RNode;
 use crate::cache::ReverseCache;
+use crate::service::stats::{Waits,Event};
 
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
@@ -52,6 +53,8 @@ pub struct LRUevict {
     client_rx : tokio::sync::mpsc::Receiver::<bool>,
     //
     persist_submit_ch: tokio::sync::mpsc::Sender<(RKey, Arc<Mutex<RNode>>, tokio::sync::mpsc::Sender<bool>)>,
+    // record stat waits
+    waits : Waits,
     //
     head: Option<Arc<Mutex<Entry>>>,
     tail: Option<Arc<Mutex<Entry>>>,
@@ -92,6 +95,7 @@ impl LRUevict { //impl LRU for MutexGuard<'_, LRUevict> {
         persist_submit_ch: tokio::sync::mpsc::Sender<(RKey, Arc<tokio::sync::Mutex<RNode>>, tokio::sync::mpsc::Sender<bool>)>,
         client_ch : tokio::sync::mpsc::Sender::<bool>,
         client_rx : tokio::sync::mpsc::Receiver::<bool>,
+        waits : Waits
     ) -> Self {
         LRUevict{
             capacity: cap,
@@ -99,6 +103,8 @@ impl LRUevict { //impl LRU for MutexGuard<'_, LRUevict> {
             lookup: HashMap::new(),
             // send channels for persist requests
             persist_submit_ch: persist_submit_ch,
+            // record stat waits
+            waits,
             // sync channels with Persist
             client_ch: client_ch,
             client_rx : client_rx,
@@ -137,7 +143,7 @@ impl LRUevict { //impl LRU for MutexGuard<'_, LRUevict> {
         println!("{} LRU attach {:?}. ***********",task, rkey);
         //self.print().await;     
         let mut lc = 0;   
-        while self.cnt > self.capacity && lc < 3 {
+        while self.cnt >= self.capacity && lc < 3 {
         
             lc += 1;
             // ================================
@@ -150,6 +156,7 @@ impl LRUevict { //impl LRU for MutexGuard<'_, LRUevict> {
             let mut evict_entry = lru_evict_entry.lock().await;
             println!("{} LRU attach evict - about to acquire lock on  {:?}",task, evict_entry.key);
 
+            let before = Instant::now();
             let mut cache_guard = cache.lock().await;
             let Some(arc_evict_node_) = cache_guard.0.get(&evict_entry.key)  
                         else { println!("{} LRU: PANIC - attach evict processing: expect entry in cache {:?}",task, evict_entry.key);
@@ -159,7 +166,7 @@ impl LRUevict { //impl LRU for MutexGuard<'_, LRUevict> {
 
             let arc_evict_node=arc_evict_node_.clone();
             let tlock_result = arc_evict_node.try_lock();
-            drop(cache_guard);
+            //drop(cache_guard);
             // ==========================
             // acquire lock on evict node 
             // ==========================
@@ -170,7 +177,7 @@ impl LRUevict { //impl LRU for MutexGuard<'_, LRUevict> {
                     // ============================
                     // remove node from cache
                     // ============================
-                    let mut cache_guard = cache.lock().await;
+                    //let mut cache_guard = cache.lock().await;
                     println!("{} LRU attach evict - remove from Cache {:?}", task, evict_entry.key);
                     cache_guard.0.remove(&evict_entry.key);     
                     // ===================================
@@ -219,8 +226,10 @@ impl LRUevict { //impl LRU for MutexGuard<'_, LRUevict> {
                     // Abort eviction - as node is being accessed.
                     // TODO check if error is "node locked"
                     println!("{} 3x LRU attach - lock cannot be acquired - abort eviction {:?}",task, evict_entry.key);
-                    }
+                    break;
+                }
             }
+            self.waits.record(Event::LruEvictCacheLock, Instant::now().duration_since(before)).await;  
         }
         // ======================
         // attach to head of LRU
@@ -379,12 +388,14 @@ pub fn start_service(
         ,mut lru_flush_rx : tokio::sync::mpsc::Receiver<tokio::sync::mpsc::Sender<()>>
         //
         ,persist_submit_ch : tokio::sync::mpsc::Sender<(RKey, Arc<Mutex<RNode>>, tokio::sync::mpsc::Sender<bool>)>
+        //
+        ,waits : Waits
 ) -> tokio::task::JoinHandle<()>  {
     // also consider tokio::task::spawn_blocking() which will create a OS thread and allocate task to it.
     // 
     let (lru_client_ch, mut lru_client_rx) = tokio::sync::mpsc::channel::<bool>(1);
    
-    let mut lru_evict = lru::LRUevict::new(lru_capacity, persist_submit_ch.clone(), lru_client_ch, lru_client_rx);
+    let mut lru_evict = lru::LRUevict::new(lru_capacity, persist_submit_ch.clone(), lru_client_ch, lru_client_rx, waits);
 
     let lru_server = tokio::task::spawn( async move { 
         println!("LRU service started....");

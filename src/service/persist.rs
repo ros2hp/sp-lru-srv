@@ -25,7 +25,7 @@ use tokio::sync::Mutex;
 
 use uuid::Uuid;
 
-const MAX_PRESIST_TASKS: u8 = 2;
+const MAX_PRESIST_TASKS: u8 = 8;
 
 struct Lookup(HashMap<RKey, Arc<Mutex<RNode>>>);
 
@@ -87,7 +87,6 @@ pub fn start_service(
     //mut _flush_rx: tokio::sync::mpsc::Receiver<(RKey, Arc<Mutex<RNode>>, tokio::sync::mpsc::Sender<bool>)>,
     mut client_query_rx: tokio::sync::mpsc::Receiver<QueryMsg>,
     mut pre_shutdown_rx: tokio::sync::mpsc::Receiver<tokio::sync::mpsc::Sender<()>>,
-    stats_close_ch: tokio::sync::mpsc::Sender<bool>,
     mut shutdown_ch: tokio::sync::broadcast::Receiver<u8>,
     waits_ : Waits,
 ) -> task::JoinHandle<()> {
@@ -118,7 +117,7 @@ pub fn start_service(
         loop {
             //let persist_complete_send_ch_=persist_completed_send_ch.clone();
             tokio::select! {
-                //biased;         // removes random number generation - normal processing will determine order so select! can follow it.
+                // biased;         // removes random number generation - normal processing will determine order so select! can follow it.
                 // note: recv() is cancellable, meaning select! can cancel a recv() without loosing data in the channel.
                 // select! will be forced to cancel recv() if another branch event happens e.g. recv() on shutdown_channel.
                 Some((rkey, arc_node, client_ch )) = submit_rx.recv() => {
@@ -287,10 +286,6 @@ pub fn start_service(
                             }
                         }
                         println!("PERSIST  shutdown completed. Tasks {}",tasks);
-                        // exit loop
-                        if let Err(err) = stats_close_ch.send(true).await {
-                            panic!("Error in sending client_ch [{}]",err)
-                        };     
                         // if let Err(err) = client_ch.send(()).await {
                         //     panic!("Error in sending client_ch [{}]",err)
                         // };  
@@ -379,7 +374,7 @@ async fn persist_rnode(
             //.return_values(ReturnValue::AllNew)
             .send()
             .await;
-            waits.record(Event::Persist_Embedded, Instant::now().duration_since(before)).await;        
+            waits.record(Event::PersistEmbedded, Instant::now().duration_since(before)).await;        
        
             handle_result(&rkey, result);
 
@@ -434,7 +429,7 @@ async fn persist_rnode(
 
                     }                                        
                     update_expression = "SET #target=list_append(#target, :tuid), #bid=list_append(#bid, :bid), #id=list_append(#id, :id)";  
-                    event = Event::Persist_ovb_append;
+                    event = Event::PersistOvbAppend;
                     sk_w_bid = rkey.1.clone();
                     sk_w_bid.push('%');
                     sk_w_bid.push_str(&node.obid[ocur as usize].to_string());
@@ -489,7 +484,7 @@ async fn persist_rnode(
                     sk_w_bid.push_str(&node.obid[ocur as usize].to_string());
     
                     update_expression = "SET #target = :tuid, #bid=:bid, #id = :id";
-                    event = Event::Persist_ovb_set;
+                    event = Event::PersistOvbSet;
                 }
                 // ================
                 // add OvB batches
@@ -552,7 +547,7 @@ async fn persist_rnode(
             //.return_values(ReturnValue::AllNew)
             .send()
             .await;
-            waits.record(Event::Persist_meta, Instant::now().duration_since(before)).await;        
+            waits.record(Event::PersistMeta, Instant::now().duration_since(before)).await;        
      
         handle_result(&rkey, result);
         
