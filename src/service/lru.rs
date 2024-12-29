@@ -205,7 +205,7 @@ impl LRUevict { //impl LRU for MutexGuard<'_, LRUevict> {
                     println!("{} LRU: attach notify evict service ...passing arc_node for rkey {:?}",task, evict_entry.key);
                     if let Err(err) = self
                                         .persist_submit_ch
-                                        .send((evict_entry.key.clone(), arc_evict_node.clone(), self.client_ch.clone()))
+                                        .send((evict_entry.key.clone(), arc_evict_node.clone(), lru_client_ch))
                                         .await
                                     {
                                         println!("{} LRU Error sending on Evict channel: [{}]",task, err);

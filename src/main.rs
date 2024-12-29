@@ -72,7 +72,7 @@ const MAX_OV_BLOCKS: usize = 5; // prod value : 100
 // OV_MAX_BATCH_SIZE - number of items to an overflow batch. Always fixed at this value.
 // The limit is checked using the database SIZE function during insert of the child data into the overflow block.
 // An overflow block has an unlimited number of batches.
-const OV_MAX_BATCH_SIZE: usize = 217; //15; // Prod 100 to 500.
+const OV_MAX_BATCH_SIZE: usize = 160; //15; // Prod 100 to 500.
 
 // OV_BATCH_THRESHOLD, initial number of batches in an overflow block before creating new Overflow block.
 // Once all overflow blocks have been created (MAX_OV_BLOCKS), blocks are randomly chosen and each block
@@ -237,7 +237,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
     // =====================
     // 4. start lru service 
     // ===================== 
-    let (lru_ch_p, mut lru_operation_rx) = tokio::sync::mpsc::channel::<(usize, RKey, Instant,tokio::sync::mpsc::Sender<bool>, lru::LruAction)>(MAX_SP_TASKS);
+    let (lru_ch_p, mut lru_operation_rx) = tokio::sync::mpsc::channel::<(usize, RKey, Instant,tokio::sync::mpsc::Sender<bool>, lru::LruAction)>(MAX_SP_TASKS+1);
     let (lru_flush_ch, lru_flush_rx) = tokio::sync::mpsc::channel::<tokio::sync::mpsc::Sender<()>>(1);
     
     let lru_service = service::lru::start_service(LRU_CAPACITY, cache.clone(), lru_operation_rx, lru_flush_rx, lru_persist_submit_ch, waits.clone()); 
