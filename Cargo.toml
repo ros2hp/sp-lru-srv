@@ -12,6 +12,7 @@ aws-types = "1.1.4"
 tokio = { version = "1.40.0", features = ["full"] }
 mysql_async = "0.34.*"
 aws-smithy-runtime-api = "1.7"
+trait-variant = "0.1.2"
 
 [dependencies.uuid]
 version = "1.11.0"
@@ -20,4 +21,3 @@ features = [
     "fast-rng",          # Use a faster (but still sufficiently random) RNG
     "macro-diagnostics", # Enable better diagnostics for compile-time UUIDs
 ]
-
