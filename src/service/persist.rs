@@ -130,11 +130,12 @@ where K: Clone + std::fmt::Debug + std::cmp::Eq + std::hash::Hash + std::marker:
                             pending_q.0.push_front(K.clone());                         
     
                         } else {
-                            println!("PERSIST: submit ASYNC 1 call to persist_V tasks {}",tasks);
+                            // ==============================================
+                            // lock arc node - to access type persist method
+                            // ==============================================
                             let node_guard_=arc_node.lock().await;
-                            println!("PERSIST: submit ASYNC 1a call to persist_V tasks {}",tasks);
+
                             let mut node_guard=node_guard_.clone();
-                            println!("PERSIST: submit ASYNC 2call to persist_V tasks {}",tasks);
                             // spawn async task to persist node
                             let dyn_client_ = dyn_client.clone();
                             let tbl_name_ = tbl_name.clone();
@@ -228,6 +229,7 @@ where K: Clone + std::fmt::Debug + std::cmp::Eq + std::hash::Hash + std::marker:
                         };
                         
                     } else {
+                        
                         //println!("PERSIST : send ACK (false) to client {:?}",query_msg.0);
                         // send ACK (false) to client 
                         if let Err(err) = query_msg.1.send(false).await {
