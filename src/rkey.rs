@@ -2,7 +2,7 @@ use super::*;
 
 use tokio::time::Instant;
 
-use crate::cache::ReverseCache;
+use crate::cache::Cache;
 use crate::service::stats::{Waits,Event};
 
 use service::lru::LruAction;
@@ -24,14 +24,13 @@ impl RKey {
                             ,table_name: &str
                             //
                             ,lru_ch : tokio::sync::mpsc::Sender<(usize, RKey, Instant, tokio::sync::mpsc::Sender<bool>, LruAction)>
-                            ,cache : Arc<tokio::sync::Mutex<ReverseCache>>
+                            ,cache : Arc<tokio::sync::Mutex<Cache::<RKey,RNode>>>
                             //
-                            ,persist_query_ch: tokio::sync::mpsc::Sender<QueryMsg>
+                            ,persist_query_ch: tokio::sync::mpsc::Sender<QueryMsg<RKey>>
                             ,persist_client_send_ch: tokio::sync::mpsc::Sender<bool>
                             ,persist_srv_resp_rx: &mut tokio::sync::mpsc::Receiver<bool> 
                             //
                             ,target : &Uuid
-                            ,bid: usize
                             ,id : usize
                             //
                             ,waits: Waits
@@ -63,7 +62,7 @@ impl RKey {
                 self.wait_if_evicted(task, persist_query_ch, persist_client_send_ch, persist_srv_resp_rx, waits.clone()).await;
               
                 rnode_guard.load_OvB_metadata(dyn_client, table_name, self, task).await;
-                rnode_guard.add_reverse_edge(target.clone(), bid as u32, id as u32);
+                rnode_guard.add_reverse_edge(target.clone(), id as u32);
                 //
                 before =Instant::now();
                 if let Err(err) = lru_ch.send((task, self.clone(), before, client_ch, LruAction::Attach)).await {
@@ -95,7 +94,7 @@ impl RKey {
 
                     // load node from database and attach to LRU
                     rnode_guard.load_OvB_metadata(dyn_client, table_name, self, task).await;
-                    rnode_guard.add_reverse_edge(target.clone(), bid as u32, id as u32);
+                    rnode_guard.add_reverse_edge(target.clone(), id as u32);
                
                     before =Instant::now();
                     if let Err(err)= lru_ch.send((task, self.clone(), before, client_ch, LruAction::Attach)).await {
@@ -110,7 +109,7 @@ impl RKey {
                 } else {
                                    
                     println!("{} RKEY add_reverse_edge: - in cache: true about add_reverse_edge {:?}", task, self);    
-                    rnode_guard.add_reverse_edge(target.clone(), bid as u32, id as u32);   
+                    rnode_guard.add_reverse_edge(target.clone(),  id as u32);   
                     //println!("{} RKEY add_reverse_edge: - in cache: send to LRU move_to_head {:?}", task, self);
                     before =Instant::now();    
                     if let Err(err) = lru_ch.send((task, self.clone(), before, client_ch, LruAction::Move_to_head)).await {
@@ -127,7 +126,7 @@ impl RKey {
     async fn wait_if_evicted(
         &self
         ,task : usize
-        ,persist_query_ch: tokio::sync::mpsc::Sender<QueryMsg>
+        ,persist_query_ch: tokio::sync::mpsc::Sender<QueryMsg<RKey>>
         ,persist_client_send_ch: tokio::sync::mpsc::Sender<bool>
         ,persist_srv_resp_rx: &mut tokio::sync::mpsc::Receiver<bool> 
         //

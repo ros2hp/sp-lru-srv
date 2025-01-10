@@ -1,7 +1,3 @@
-//#[deny(unused_imports)]
-//#[warn(unused_imports)]
-#[allow(unused_imports)]
-
 mod node;
 mod rkey;
 mod cache;
@@ -18,7 +14,7 @@ use std::string::String;
 use std::sync::Arc;
 
 use node::RNode;
-use cache::ReverseCache;
+use cache::Cache;
 
 use rkey::RKey;
 use service::lru;
@@ -42,8 +38,8 @@ use tokio::time::{sleep, Duration, Instant};
 //use tokio::task::spawn;
 
 const DYNAMO_BATCH_SIZE: usize = 25;
-const MAX_SP_TASKS : usize = 28;
-pub const LRU_CAPACITY : usize = 60;
+const MAX_SP_TASKS : usize = 38;
+pub const LRU_CAPACITY : usize = 40;
 
 const LS: u8 = 1;
 const LN: u8 = 2;
@@ -145,10 +141,10 @@ enum Operation {
 }
 
 // Message sent on Evict Queued Channel
-struct QueryMsg(RKey, tokio::sync::mpsc::Sender<bool>);
+struct QueryMsg<K>(K, tokio::sync::mpsc::Sender<bool>);
 
-impl QueryMsg {
-    fn new(rkey: RKey, resp_ch: tokio::sync::mpsc::Sender<bool>) -> Self {
+impl<K> QueryMsg<K>{
+    fn new(rkey: K, resp_ch: tokio::sync::mpsc::Sender<bool>) -> Self {
         QueryMsg(rkey, resp_ch)
     }
 }
@@ -218,14 +214,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
     // ================================================
     // 3. allocate Reverse Cache and LRU 
     // ================================================
-    //  * query persist service e.g. is node in persist queue?
-    let (persist_query_ch_p, persist_query_rx) = tokio::sync::mpsc::channel::<QueryMsg>(MAX_SP_TASKS * 2); 
+    let (persist_query_ch_p, persist_query_rx) = tokio::sync::mpsc::channel::<QueryMsg<RKey>>(MAX_SP_TASKS * 2); 
     let (lru_persist_submit_ch, persist_submit_rx) = tokio::sync::mpsc::channel::<(RKey, Arc<Mutex<RNode>>, tokio::sync::mpsc::Sender<bool>)>(MAX_SP_TASKS);
-   // let (lru_persist_flush_ch, persist_flush_rx) = tokio::sync::mpsc::channel::<(RKey, Arc<Mutex<RNode>>, tokio::sync::mpsc::Sender<bool>)>(MAX_SP_TASKS*20);
-    let (persist_pre_shutdown_ch, pre_shutdown_rx) = tokio::sync::mpsc::channel::<tokio::sync::mpsc::Sender<()>>(1);
-    
-    let cache = ReverseCache::new(); 
-    //let lru_evict = lru::LRUevict::new(LRU_CAPACITY, persist_submit_ch.clone(), lru_client_ch, lru_client_rx);
+
+    let reverse_edge_cache = Cache::<RKey, RNode>::new(); 
         // ====================
     // start Waits service
     // ====================
@@ -237,10 +229,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
     // =====================
     // 4. start lru service 
     // ===================== 
-    let (lru_ch_p, mut lru_operation_rx) = tokio::sync::mpsc::channel::<(usize, RKey, Instant,tokio::sync::mpsc::Sender<bool>, lru::LruAction)>(MAX_SP_TASKS+1);
+    let (lru_ch_p, lru_operation_rx) = tokio::sync::mpsc::channel::<(usize, RKey, Instant,tokio::sync::mpsc::Sender<bool>, lru::LruAction)>(MAX_SP_TASKS+1);
     let (lru_flush_ch, lru_flush_rx) = tokio::sync::mpsc::channel::<tokio::sync::mpsc::Sender<()>>(1);
     
-    let lru_service = service::lru::start_service(LRU_CAPACITY, cache.clone(), lru_operation_rx, lru_flush_rx, lru_persist_submit_ch, waits.clone()); 
+    let _ = service::lru::start_service::<RKey,RNode>(
+                                        LRU_CAPACITY
+                                        , reverse_edge_cache.clone()
+                                        , lru_operation_rx
+                                        , lru_flush_rx
+                                        , lru_persist_submit_ch
+                                        , waits.clone()); 
 
     // ================================================
     // 3. start persist service
@@ -249,13 +247,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
     let persist_shutdown_ch = shutdown_broadcast_sender.subscribe();
     println!("start persist service...");
     // 
-    //let (lru_persist_complete_ch_p, lru_evict_complete_rx) = tokio::sync::mpsc::channel::<RKey>(MAX_SP_TASKS*2);
-    let persist_service = service::persist::start_service(
+    let persist_service = service::persist::start_service::<RKey,RNode>(
         dynamo_client.clone(),
         table_name,
         persist_submit_rx,
         persist_query_rx,
-        pre_shutdown_rx,
         persist_shutdown_ch,
         waits.clone(),
     );
@@ -356,7 +352,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
         let retry_ch = retry_send_ch.clone();
         let graph_sn = graph_prefix_wdot.trim_end_matches('.').to_string();
         let node_types = node_types.clone(); // Arc instance - single cache in heap storage
-        let cache= cache.clone();
+        let cache = reverse_edge_cache.clone();
         let persist_query_ch  = persist_query_ch_p.clone();
         let lru_ch = lru_ch_p.clone();
         let waits = waits.clone();
@@ -682,7 +678,7 @@ async fn persist(
     ,dyn_client: &DynamoClient
     ,table_name: &str
     //
-    ,cache: Arc<tokio::sync::Mutex<cache::ReverseCache>>
+    ,cache: Arc<tokio::sync::Mutex<cache::Cache::<RKey,RNode>>>
     //
     ,mut bat_w_req: Vec<WriteRequest>
     ,add_rvs_edge: bool
@@ -694,7 +690,7 @@ async fn persist(
     ,ovb_pk: HashMap<String, Vec<Uuid>>
     ,items: HashMap<SortK, Operation>
     //
-    ,persist_query_ch: tokio::sync::mpsc::Sender<QueryMsg>
+    ,persist_query_ch: tokio::sync::mpsc::Sender<QueryMsg<RKey>>
     //
     ,lru_ch : tokio::sync::mpsc::Sender<(usize, RKey, Instant, tokio::sync::mpsc::Sender<bool>, lru::LruAction)>
     //
@@ -811,7 +807,6 @@ async fn persist(
                             , &mut persist_srv_resp_rx
                             //
                             , &target_uid
-                            , 0
                             , id          
                             , waits.clone())
                             .await;
@@ -935,7 +930,6 @@ async fn persist(
                                     , &mut persist_srv_resp_rx
                                     //
                                     , &ovb
-                                    , bid
                                     , id                     
                                     , waits.clone())
                                     .await;
@@ -1048,7 +1042,6 @@ async fn persist(
                                     , &mut persist_srv_resp_rx
                                     //
                                     , &ovb
-                                    , bid
                                     , id          
                                     , waits.clone())
                                     .await;
@@ -1246,3 +1239,4 @@ fn print_batch(bat_w_req: Vec<WriteRequest>) -> Vec<WriteRequest> {
 
     new_bat_w_req
 }
+
