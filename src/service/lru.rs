@@ -213,9 +213,9 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                                     {
                                         println!("{} LRU Error sending on Evict channel: [{}]",task, err);
                                     }
-                    // ===================
-                    // cache lock released
-                    // ===================
+                    // =====================================================================
+                    // cache lock released - now that submit persist has been sent (queued)
+                    // =====================================================================
                     drop(cache_guard);
 
                     println!("{} LRU: attach evict - waiting on persist client_rx...{:?}",task,evict_entry.key);
