@@ -176,6 +176,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
 
                 Ok(mut evict_node_guard)  => {
                     evict_node_guard.set_evicted(true);
+                    drop(evict_node_guard);
                     // ============================
                     // remove node from cache
                     // ============================
@@ -212,12 +213,6 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                                     {
                                         println!("{} LRU Error sending on Evict channel: [{}]",task, err);
                                     }
-                    // ===================================================
-                    // release cache lock now that submit persist msg sent
-                    // ===================================================
-                    drop(evict_node_guard);
-                    //
-                    // sync with persist - so evict node exists in persisting state (hashmap'd) while the lock on evict node is active
                     // ===================
                     // cache lock released
                     // ===================
