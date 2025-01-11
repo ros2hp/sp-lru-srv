@@ -38,7 +38,7 @@ use tokio::time::{sleep, Duration, Instant};
 //use tokio::task::spawn;
 
 const DYNAMO_BATCH_SIZE: usize = 25;
-const MAX_SP_TASKS : usize = 38;
+const MAX_SP_TASKS : usize = 12;
 pub const LRU_CAPACITY : usize = 40;
 
 const LS: u8 = 1;
@@ -279,7 +279,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
     // ============================
     let mut parent_node: Vec<Uuid> = vec![];
 
-    let _parent_edge = "SELECT Uid FROM Edge_test order by cnt desc"
+    // ==============================
+    // SQL for test data (Films only): fetch all Film nodes using the sortk value
+    //let child_edge = r#"select distinct puid from test_childedge where sortk = "m|A#G#:G""#
+    // ===============================
+    //let _parent_edge = "SELECT Uid FROM Edge_test order by cnt desc"
+    let child_edge = r#"select distinct puid from test_childedge where sortk = "m|A#G#:G""#
         .with(())
         .map(&mut conn, |puid| parent_node.push(puid))
         .await?;
@@ -289,10 +294,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
     println!("About to SQL");
     let mut parent_edges: HashMap<Puid, HashMap<SortK, Vec<Cuid>>> = HashMap::new();
 
-    // ==============================
-    // SQL for test data (Films only): fetch all Film nodes using the sortk value
-    //let child_edge = r#"select distinct puid from test_childedge where sortk = "m|A#G#:G""#
-    // ===============================
     let child_edge = "Select puid,sortk,cuid from test_childedge order by puid,sortk"
         .with(())
         .map(&mut conn, |(puid, sortk, cuid): (Uuid, String, Uuid)| {

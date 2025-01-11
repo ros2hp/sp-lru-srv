@@ -5,7 +5,7 @@ use crate::service::stats::{Waits,Event};
 use crate::node::Evicted;
 
 use std::collections::HashMap;
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
 
 use tokio::time::{sleep, Duration, Instant};
@@ -23,18 +23,17 @@ pub struct Entry<K>{
     pub key: K,
     //
     pub next: Option<Arc<Mutex<Entry<K>>>>,
-    pub prev: Option<Weak<Mutex<Entry<K>>>>,
+    pub prev: Option<Arc<Mutex<Entry<K>>>>,
 }
 
 impl<K> Entry<K> {
-    fn new(k : K) -> Entry<K> {
-        Entry{key: k
+    fn new(key : K) -> Entry<K> {
+        Entry{key: key
             ,next: None
             ,prev: None
         }
     }
 }
-
 
 // impl Drop for Entry {
 //         fn drop(&mut self) {
@@ -43,11 +42,10 @@ impl<K> Entry<K> {
 // }
 
 
-
 pub struct LRUevict<K,V> {
     capacity: usize,
     cnt : usize,
-    // pointer to Entry value in the LRU linked list for a K
+    // pointer to Entry value in the LRU linked list for a key
     lookup : HashMap<K,Arc<Mutex<Entry<K>>>>,
     // 
     client_ch : tokio::sync::mpsc::Sender::<bool>,
@@ -77,14 +75,14 @@ pub struct LRUevict<K,V> {
 // // Makes more sense however for these methods to be part of the LRUevict itself - just epxeriementing with traits.
 // pub trait LRU {
 //     fn attach(
-//         &mut self, // , cache_guard:  &mut std::sync::MutexGuard<'_, Cache::<K,V>>
-//         K: K,
+//         &mut self, // , cache_guard:  &mut std::sync::MutexGuard<'_, Cache>
+//         key: key,
 //     );
 
 //     //pub async fn detach(&mut self
 //     fn move_to_head(
 //         &mut self,
-//         K: K,
+//         key: key,
 //     );
 // }
 
@@ -92,7 +90,8 @@ pub struct LRUevict<K,V> {
 impl<K,V> LRUevict<K,V> 
 where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker::Send, V: Evicted
 {  
-    pub fn new(
+    
+    fn new(
         cap: usize,
         persist_submit_ch: tokio::sync::mpsc::Sender<(K, Arc<tokio::sync::Mutex<V>>, tokio::sync::mpsc::Sender<bool>)>,
         client_ch : tokio::sync::mpsc::Sender::<bool>,
@@ -124,25 +123,25 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
         let mut i = 0;
         while let Some(entry_) = entry {
             i+=1;
-            let k = entry_.lock().await.key.clone();
-            println!("LRU entry {} {:?}",i, k);
+            let key = entry_.lock().await.key.clone();
+            println!("LRU entry {} {:?}",i, key);
             entry = entry_.lock().await.next.clone();      
         }
         println!("*** print LRU chain DONE ***");
     }
-    
+
     // prerequisite - lru_entry has been confirmed NOT to be in lru-cache.
     // note: can only execute methods on LRUevict if lock has been acquired via Arc<Mutex<LRU>>
     async fn attach(
-        &mut self, // , cache_guard:  &mut tokio::sync::MutexGuard<'_, Cache::<K,V>>
+        &mut self, // , cache_guard:  &mut tokio::sync::MutexGuard<'_, Cache>
         task : usize, 
-        k : K,
-        mut cache: Arc<Mutex<Cache::<K,V>>>,
+        key : K,
+        cache: Arc<Mutex<Cache::<K,V>>>,
     ) {
-        // calling routine (K) is hold lock on V(K)
+        // calling routine (key) is hold lock on RNode(key)
         
         ////println!("   ");
-        println!("{} LRU attach {:?}. ***********",task, k);
+        //println!("{} LRU attach {:?}. ***********",task, key);
         //self.print().await;     
         let mut lc = 0;   
         while self.cnt >= self.capacity && lc < 3 {
@@ -151,12 +150,12 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
             // ================================
             // Evict the tail entry in the LRU 
             // ================================
-            println!("{} LRU: attach reached LRU capacity - evict tail  lru.cnt {}  lc {}  key {:?}", task, self.cnt, lc,  k);
+            //println!("{} LRU: attach reached LRU capacity - evict tail  lru.cnt {}  lc {}  key {:?}", task, self.cnt, lc,  key);
             // unlink tail lru_entry from lru and notify evict service.
             // Clone REntry as about to purge it from cache.
             let lru_evict_entry = self.tail.as_ref().unwrap().clone();
             let mut evict_entry = lru_evict_entry.lock().await;
-            println!("{} LRU attach evict - about to acquire lock on  {:?}",task, evict_entry.key);
+            //println!("{} LRU attach evict - about to acquire lock on  {:?}",task, evict_entry.key);
 
             let before = Instant::now();
             let mut cache_guard = cache.lock().await;
@@ -187,17 +186,12 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                     // detach evict entry from tail of LRU
                     // ===================================
                     match evict_entry.prev {
-                            None => {panic!("LRU attach - evict_entry - expected prev got None")}
-                            Some(ref v) => {
-                                match v.upgrade() {
-                                    None => {panic!("LRU attach - evict_entry - could not upgrade")}
-                                    Some(new_tail) => {
-                                        let mut new_tail_guard = new_tail.lock().await;
-                                        new_tail_guard.next = None;
-                                        self.tail = Some(new_tail.clone()); 
-                                    }
-                                }
-                            }
+                        None => {panic!("LRU attach - evict_entry - expected prev got None")}
+                        Some(ref new_tail) => {
+                            let mut tail_guard = new_tail.lock().await;
+                            tail_guard.next = None;
+                            self.tail = Some(new_tail.clone()); 
+                        }
                     }
                     evict_entry.prev=None;
                     evict_entry.next=None;
@@ -205,7 +199,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                     // =====================
                     // notify persist service
                     // =====================
-                    println!("{} LRU: attach notify evict service ...passing arc_node for n {:?}",task, evict_entry.key);
+                    println!("{} LRU: attach notify evict service ...passing arc_node for key {:?}",task, evict_entry.key);
                     if let Err(err) = self
                                         .persist_submit_ch
                                         .send((evict_entry.key.clone(), arc_evict_node.clone(), self.client_ch.clone()))
@@ -213,12 +207,8 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                                     {
                                         println!("{} LRU Error sending on Evict channel: [{}]",task, err);
                                     }
-                    // =====================================================================
-                    // cache lock released - now that submit persist has been sent (queued)
-                    // =====================================================================
-                    drop(cache_guard);
-
-                    println!("{} LRU: attach evict - waiting on persist client_rx...{:?}",task,evict_entry.key);
+                    //
+                    // sync with persist - so evict node exists in persisting state (hashmap'd) while the lock on evict node is active
                     if let None= self.client_rx.recv().await {
                         panic!("LRU read from client_rx is None ");
                     }
@@ -227,7 +217,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                     // remove from lru lookup 
                     // =====================
                     self.lookup.remove(&evict_entry.key);
-                    println!("{} LRU attach - release node lock {:?}",task, k);
+                    println!("{} LRU attach - release node lock {:?}",task, key);
                 } 
                 Err(err) =>  {
                     // Abort eviction - as node is being accessed.
@@ -241,7 +231,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
         // ======================
         // attach to head of LRU
         // ======================
-        let arc_new_entry = Arc::new(Mutex::new(Entry::new(k.clone())));
+        let arc_new_entry = Arc::new(Mutex::new(Entry::new(key.clone())));
         match self.head.clone() {
             None => { 
                 // empty LRU 
@@ -251,35 +241,35 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                 }
             
             Some(e) => {
-                let mut new_entry = arc_new_entry.lock().await;
+                let mut new_entry_guard: tokio::sync::MutexGuard<'_, Entry<K>> = arc_new_entry.lock().await;
                 let mut old_head_guard = e.lock().await;
                 // set old head prev to point to new entry
-                old_head_guard.prev = Some(Arc::downgrade(&arc_new_entry));
+                old_head_guard.prev = Some(arc_new_entry.clone());
                 // set new entry next to point to old head entry & prev to NOne   
-                new_entry.next = Some(e.clone());
-                new_entry.prev = None;
+                new_entry_guard.next = Some(e.clone());
+                new_entry_guard.prev = None;
                 // set LRU head to point to new entry
                 self.head=Some(arc_new_entry.clone());
                 
-                if let None = new_entry.next {
-                    panic!("LRU INCONSISTENCY attach: expected Some for next but got NONE {:?}",k);
+                if let None = new_entry_guard.next {
+                    panic!("LRU INCONSISTENCY attach: expected Some for next but got NONE {:?}",key);
                 }
-                if let Some(_) = new_entry.prev {
-                    panic!("LRU INCONSISTENCY attach: expected None for prev but got NONE {:?}",k);
+                if let Some(_) = new_entry_guard.prev {
+                    panic!("LRU INCONSISTENCY attach: expected None for prev but got NONE {:?}",key);
                 }
                 if let None = old_head_guard.prev {
-                    panic!("LRU INCONSISTENCY attach: expected entry to have prev set to NONE {:?}",k);
+                    panic!("LRU INCONSISTENCY attach: expected entry to have prev set to NONE {:?}",key);
                 }
             }
         }
-        println!("{} LRU: attach - insert into lookup {:?}",task, k);
-        self.lookup.insert(k, arc_new_entry);
+        println!("{} LRU: attach - insert into lookup {:?}",task, key);
+        self.lookup.insert(key, arc_new_entry);
         
         if let None = self.head {
-                //println!("LRU INCONSISTENCY attach: expected LRU to have head but got NONE")
+            panic!("LRU INCONSISTENCY attach: expected LRU to have head but got NONE")
         }
         if let None = self.tail {
-                //println!("LRU INCONSISTENCY attach: expected LRU to have tail but got NONE")
+            panic!("LRU INCONSISTENCY attach: expected LRU to have tail but got NONE")
         }
         self.cnt+=1;
         println!("{} LRU: attach add cnt {}",task, self.cnt);
@@ -292,11 +282,11 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
     async fn move_to_head(
         &mut self,
         task: usize, 
-        k: K,
-        mut cache: Arc<Mutex<Cache::<K,V>>>,
+        key: K,
+        cache: Arc<Mutex<Cache::<K,V>>>,
     ) {  
         //println!("--------------");
-        println!("{} LRU move_to_head {:?} ********",task, k);
+        println!("{} LRU move_to_head {:?} ********",task, key);
         // abort if lru_entry is at head of lru
         match self.head {
             None => {
@@ -304,19 +294,19 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
             }
             Some(ref v) => {
                 let hd: K = v.lock().await.key.clone();
-                if hd == k {
-                    // k already at head
-                    println!("{} LRU entry already at head - return {:?}",task, k);
+                if hd == key {
+                    // key already at head
+                    println!("{} LRU entry already at head - return {:?}",task, key);
                     return
                 }    
             }
         }
         // lookup entry in map
-        let lru_entry = match self.lookup.get(&k) {
+        let lru_entry = match self.lookup.get(&key) {
             None => {  
-                        // node has been evicted since Ks.add_reverse_edge9) detected it was cached  - due to msg delay in LRU channel buffer
+                        // node has been evicted since keys.add_reverse_edge9) detected it was cached  - due to msg delay in LRU channel buffer
                         // attach instead.
-                        self.attach(task, k, cache).await;
+                        self.attach(task, key, cache).await;
                         return;    
                     }
             Some(v) => v.clone()
@@ -327,7 +317,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
             let lru_entry_guard = lru_entry.lock().await;
             // NEW CODE to fix eviction and new request at same time on a Node
             if let None = lru_entry_guard.prev {
-                ////println!("LRU INCONSISTENCY move_to_head: expected entry to have prev but got NONE {:?}",k);
+                ////println!("LRU INCONSISTENCY move_to_head: expected entry to have prev but got NONE {:?}",key);
                 if let None = lru_entry_guard.next {
                     // should not happend
                     panic!("LRU move_to_head : got a entry with no prev or next set (ie. a new node) - some synchronisation gone astray")
@@ -337,27 +327,21 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
             // check if moving tail entry
             if let None = lru_entry_guard.next {
             
-                println!("{} LRU move_to_head detach tail entry {:?}",task, k);
-                let prev_ = lru_entry_guard.prev.as_ref().unwrap();
-                let Some(prev_upgrade) =  prev_.upgrade() else {panic!("at tail: failed to upgrade weak lru_entry {:?}",k)};
-                let mut prev_guard = prev_upgrade.lock().await;
+                println!("{} LRU move_to_head detach tail entry {:?}",task, key);
+                let mut prev_guard = lru_entry_guard.prev.as_ref().unwrap().lock().await;
                 prev_guard.next = None;
-                self.tail = Some(lru_entry_guard.prev.as_ref().unwrap().upgrade().as_ref().unwrap().clone());
+                self.tail = Some(lru_entry_guard.prev.as_ref().unwrap().clone());
                 
             } else {
                 
-                let prev_ = lru_entry_guard.prev.as_ref().unwrap();
-                let Some(prev_upgrade) =  prev_.upgrade() else {panic!("failed to upgrade weak lru_entry {:?}",k)};
-                let mut prev_guard = prev_upgrade.lock().await;
-    
-                let next_ = lru_entry_guard.next.as_ref().unwrap();
-                let mut next_guard= next_.lock().await;
+                let mut prev_guard = lru_entry_guard.prev.as_ref().unwrap().lock().await;
+                let mut next_guard = lru_entry_guard.next.as_ref().unwrap().lock().await;
 
-                prev_guard.next = Some(next_.clone());
-                next_guard.prev = Some(Arc::downgrade(&prev_upgrade));           
+                prev_guard.next = Some(lru_entry_guard.next.as_ref().unwrap().clone());
+                next_guard.prev = Some(lru_entry_guard.prev.as_ref().unwrap().clone());
 
             }
-            println!("{} LRU move_to_head Detach complete...{:?}",task, k);
+            println!("{} LRU move_to_head Detach complete...{:?}",task, key);
         }
         // ATTACH
         let mut lru_entry_guard = lru_entry.lock().await;
@@ -370,19 +354,20 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
             }
             Some(ref v) => {
                 let mut hd = v.lock().await;
-                hd.prev = Some(Arc::downgrade(&lru_entry)); 
+                hd.prev = Some(lru_entry.clone()); 
                 println!("{} LRU move_to_head: attach old head {:?} prev to {:?} ",task, hd.key, lru_entry_guard.key);
             }
         }
         lru_entry_guard.prev = None;
         self.head = Some(lru_entry.clone());
-        println!("{} LRU move_to_head complete...{:?}",task, k);
+        println!("{} LRU move_to_head complete...{:?}",task, key);
     }
 }
 
 
 pub fn start_service<K:std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker::Send + std::marker::Sync + 'static, V: std::marker::Send + std::marker::Sync + Evicted + 'static >
-(        lru_capacity : usize
+(
+         lru_capacity : usize
         ,mut cache: Arc<tokio::sync::Mutex<Cache::<K,V>>>
         //
         ,mut lru_rx : tokio::sync::mpsc::Receiver<(usize, K, Instant,tokio::sync::mpsc::Sender<bool>, LruAction)>
@@ -391,10 +376,11 @@ pub fn start_service<K:std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone 
         ,persist_submit_ch : tokio::sync::mpsc::Sender<(K, Arc<Mutex<V>>, tokio::sync::mpsc::Sender<bool>)>
         //
         ,waits : Waits
-) -> tokio::task::JoinHandle<()>  {
+) -> tokio::task::JoinHandle<()> 
+ {
     // also consider tokio::task::spawn_blocking() which will create a OS thread and allocate task to it.
     // 
-    let (lru_client_ch, mut lru_client_rx) = tokio::sync::mpsc::channel::<bool>(1);
+    let (lru_client_ch, lru_client_rx) = tokio::sync::mpsc::channel::<bool>(1);
    
     let mut lru_evict = lru::LRUevict::new(lru_capacity, persist_submit_ch.clone(), lru_client_ch, lru_client_rx, waits);
 
@@ -404,16 +390,14 @@ pub fn start_service<K:std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone 
             tokio::select! {
                 biased;         // removes random number generation - normal processing will determine order so select! can follow it.
                 // note: recv() is cancellable, meaning select! can cancel a recv() without loosing data in the channel.
-                Some((task, k, sent_time, client_ch, action)) = lru_rx.recv() => {
+                Some((task, key, sent_time, client_ch, action)) = lru_rx.recv() => {
 
                         match action {
                             LruAction::Attach => {
-                                println!("{} delay {:?} LRU: action Attach {:?}",task, Instant::now().duration_since(sent_time).as_nanos(), k);
-                                lru_evict.attach(task, k, cache.clone()).await;
+                                lru_evict.attach(task, key, cache.clone()).await;
                             }
                             LruAction::Move_to_head => {
-                                println!("{} delay {:?} LRU: action move_to_head {:?}",task, Instant::now().duration_since(sent_time).as_nanos(), k);
-                                lru_evict.move_to_head(task, k, cache.clone()).await;
+                                lru_evict.move_to_head(task, key, cache.clone()).await;
                             }
                         }
                         // send response back to client...sync'd.
@@ -431,26 +415,20 @@ pub fn start_service<K:std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone 
                                     println!("LRU flush in progress..persist entries in LRU flust {} lru entries",lru_evict.cnt);
                                     while let Some(entry_) = entry {
                                             lc += 1;     
-                                            let k = entry_.lock().await.key.clone();
-                                            println!("LRU: flush-persist  {}  {:?}",lc, k);
-                                            if let Some(arc_node) = cache_guard.0.get(&k) {
+                                            let key = entry_.lock().await.key.clone();
+                                            if let Some(arc_node) = cache_guard.0.get(&key) {
                                                 if let Err(err) = lru_evict.persist_submit_ch // persist_flush_ch
-                                                            .send((k, arc_node.clone(), lru_evict.client_ch.clone()))
+                                                            .send((key, arc_node.clone(), lru_evict.client_ch.clone()))
                                                             .await {
                                                                 println!("Error on persist_submit_ch channel [{}]",err);
                                                             }
                                             } 
                                             // sync with Persist service
-                                            println!("LRU: flush-persist get Persist response");
                                             if let None = lru_evict.client_rx.recv().await {
                                                 panic!("LRU read from client_rx is None ");
                                             }
-                                            println!("LRU: flush-persist get next...");
                                             entry = entry_.lock().await.next.clone();         
-                                            println!("LRU: flush-persist .. got it");      
                                     }
-                                    //sleep(Duration::from_millis(2000)).await;
-                                    println!("LRU: flush-persist Send on client_ch ");
                                     if let Err(err) = client_ch.send(()).await {
                                         panic!("LRU send on client_ch {} ",err);
                                     };
@@ -459,8 +437,7 @@ pub fn start_service<K:std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone 
                     }                      
             }    
         } 
-        (())  
-        //println!("LRU service shutdown....");          
+        ()       
     }); 
 
     lru_server
