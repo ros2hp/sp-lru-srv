@@ -288,6 +288,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
     // =======================================================
     println!("About to SQL");
     let mut parent_edges: HashMap<Puid, HashMap<SortK, Vec<Cuid>>> = HashMap::new();
+
+    // ==============================
+    // SQL for test data (Films only): fetch all Film nodes using the sortk value
+    //let child_edge = r#"select distinct puid from test_childedge where sortk = "m|A#G#:G""#
+    // ===============================
     let child_edge = "Select puid,sortk,cuid from test_childedge order by puid,sortk"
         .with(())
         .map(&mut conn, |(puid, sortk, cuid): (Uuid, String, Uuid)| {
