@@ -2,8 +2,10 @@ use super::*;
 
 use crate::types;
 use crate::rkey::RKey;
-use crate::cache::Persistence;
+use crate::cache::{Persistence,NewValue};
 use crate::service::stats::Waits;
+
+use std::fmt::Debug;
 
 use aws_sdk_dynamodb::config::http::HttpResponse;
 use aws_sdk_dynamodb::operation::update_item::{UpdateItemError, UpdateItemOutput};
@@ -16,7 +18,7 @@ use aws_smithy_runtime_api::client::result::SdkError;
 use uuid::Uuid;
 
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RNode {
     pub node: Uuid,     // child or associated OvB Uuid
     pub rvs_sk: String, // child or associated OvB batch SK
@@ -24,8 +26,6 @@ pub struct RNode {
     // accumlate edge data into these Vec's
     pub target_uid: Vec<AttributeValue>,
     pub target_id: Vec<AttributeValue>,
-    //
-    pub evicted : bool,
     // metadata that describes how to populate target* into db attributes when persisted
     pub ovb: Vec<Uuid>,  // Uuid of OvB
     pub obid: Vec<u32>,  // current batch id in each OvB
@@ -37,9 +37,8 @@ pub struct RNode {
     //
 }
 
-pub trait Evicted {
-    fn set_evicted(&mut self, b: bool);
-}
+
+
 
 impl RNode {
     pub fn new() -> RNode {
@@ -50,8 +49,6 @@ impl RNode {
             target_uid: vec![],
             target_id: vec![], //
             //
-            evicted: false,
-            //
             ovb: vec![],
             obid: vec![],
             //oblen: vec![],
@@ -61,26 +58,8 @@ impl RNode {
         }
     }
 
-    pub fn new_with_key(rkey: &RKey) -> Arc<Mutex<RNode>> {
-        Arc::new(Mutex::new(RNode{
-            node: rkey.0.clone(),
-            rvs_sk: rkey.1.clone(), //
-            init_cnt: 0,
-            target_uid: vec![],     // target_uid.len() total edges added in current sp session
-            target_id: vec![], //
-            //
-            evicted: false,
-            //
-            ovb: vec![],
-            obcnt:0,
-            //oblen: vec![],
-            obid: vec![],
-            oid: vec![],
-            ocur: None, //
-        }))
-    }
 
-    pub async fn load_OvB_metadata(
+    pub async fn load_ovb_metadata(
         &mut self,
         dyn_client: &DynamoClient,
         table_name: &str,
@@ -126,7 +105,7 @@ impl RNode {
         self.ocur = ri.ocur;
         
         if self.ovb.len() > 0 {
-            println!("load_OvB_metadata: ovb.len {}. for {:?}",self.ovb.len(), rkey);
+            println!("load_ovb_metadata: ovb.len {}. for {:?}",self.ovb.len(), rkey);
         }
     }
 
@@ -143,11 +122,36 @@ impl RNode {
 }
 
 
+//struct NodeMutex<'A>(MutexGuard<'A, RNode>);
+// struct NodeMutex<'A, K: InUse>(MutexGuard<'A, K>);
+
+// impl<'A, RNode: InUse> Drop for NodeMutex<'A, RNode> {//MutexGuard<'_, RNode> {
+
+//     fn drop(&mut self) {
+//         self.0.unlock();
+//         mem::drop(self);
+//     }
+
+// }
+
 // impl Drop for RNode {
 //     fn drop(&mut self) {
 //         println!("DROP RNODE {:?}",self.uuid);
 //     }
 // }
+
+    // impl CacheApply for RNode {
+
+    //     fn new_entry(&mut self) {
+    //         self.load_ovb_metadata(self.dyn_client, self.table_name).await;
+    //         self.add_reverse_edge(target.clone(), id as u32);
+    //     }
+    
+    //     fn existing_entry(&mut self) {
+    //         self.add_reverse_edge(target.clone(), id as u32);
+    //     }
+    // }
+
 
 // Populate reverse cache with return values from Dynamodb.
 // note: not interested in TARGET* attributes only OvB* attributes (metadata about TARGET*)
@@ -180,13 +184,26 @@ impl From<HashMap<String, AttributeValue>> for RNode {
     }
 }
 
-impl Evicted for RNode {
-    fn set_evicted(&mut self, b: bool ) {
-        self.evicted = b;
+
+impl NewValue<RKey,RNode> for RNode {
+
+    fn new_with_key(rkey: &RKey) -> Arc<Mutex<Self>> {
+        Arc::new(Mutex::new(RNode{
+            node: rkey.0.clone(),
+            rvs_sk: rkey.1.clone(), //
+            init_cnt: 0,
+            target_uid: vec![],     // target_uid.len() total edges added in current sp session
+            target_id: vec![], //
+            //
+            ovb: vec![],
+            obcnt:0,
+            //oblen: vec![],
+            obid: vec![],
+            oid: vec![],
+            ocur: None, //
+        }))
     }
 }
-
-
 
 impl Persistence<RKey> for RNode {
 

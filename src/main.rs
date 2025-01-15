@@ -38,7 +38,7 @@ use tokio::time::{sleep, Duration, Instant};
 //use tokio::task::spawn;
 
 const DYNAMO_BATCH_SIZE: usize = 25;
-const MAX_SP_TASKS : usize = 12;
+const MAX_SP_TASKS : usize = 18;
 pub const LRU_CAPACITY : usize = 40;
 
 const LS: u8 = 1;
@@ -211,14 +211,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
         retry_shutdown_ch,
         table_name,
     );
-    // ================================================
-    // 3. allocate Reverse Cache and LRU 
-    // ================================================
-    let (persist_query_ch_p, persist_query_rx) = tokio::sync::mpsc::channel::<QueryMsg<RKey>>(MAX_SP_TASKS * 2); 
-    let (lru_persist_submit_ch, persist_submit_rx) = tokio::sync::mpsc::channel::<(RKey, Arc<Mutex<RNode>>, tokio::sync::mpsc::Sender<bool>)>(MAX_SP_TASKS);
-
-    let reverse_edge_cache = Cache::<RKey, RNode>::new(); 
-        // ====================
+    // ====================
     // start Waits service
     // ====================
     let (stats_ch, mut stats_rx) = tokio::sync::mpsc::channel::<(service::stats::Event, Duration, Duration)>(MAX_SP_TASKS*10); 
@@ -226,10 +219,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
     let waits = service::stats::Waits::new(stats_ch);
 
     let stats_service = service::stats::start_service(stats_rx, stats_shutdown_ch);
+    // ================================================
+    // 3. allocate Reverse Cache and LRU 
+    // ================================================
+    let (persist_query_ch_p, persist_query_rx) = tokio::sync::mpsc::channel::<QueryMsg<RKey>>(MAX_SP_TASKS * 2); 
+    let (lru_persist_submit_ch, persist_submit_rx) = tokio::sync::mpsc::channel::<(RKey, Arc<Mutex<RNode>>, tokio::sync::mpsc::Sender<bool>)>(MAX_SP_TASKS);
+    let (lru_ch_p, lru_operation_rx) = tokio::sync::mpsc::channel::<(RKey, Instant,tokio::sync::mpsc::Sender<bool>, lru::LruAction)>(MAX_SP_TASKS+1);
+   
+    let reverse_edge_cache = Cache::<RKey, RNode>::new(persist_query_ch_p.clone(),lru_ch_p.clone(),waits.clone()); 
     // =====================
     // 4. start lru service 
     // ===================== 
-    let (lru_ch_p, lru_operation_rx) = tokio::sync::mpsc::channel::<(usize, RKey, Instant,tokio::sync::mpsc::Sender<bool>, lru::LruAction)>(MAX_SP_TASKS+1);
     let (lru_flush_ch, lru_flush_rx) = tokio::sync::mpsc::channel::<tokio::sync::mpsc::Sender<()>>(1);
     
     let _ = service::lru::start_service::<RKey,RNode>(
@@ -248,6 +248,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
     println!("start persist service...");
     // 
     let persist_service = service::persist::start_service::<RKey,RNode>(
+        reverse_edge_cache.clone(),
         dynamo_client.clone(),
         table_name,
         persist_submit_rx,
@@ -278,13 +279,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
     // 5. MySQL query: parent nodes
     // ============================
     let mut parent_node: Vec<Uuid> = vec![];
-
-    // ==============================
+    // ===============================
     // SQL for test data (Films only): fetch all Film nodes using the sortk value
     //let child_edge = r#"select distinct puid from test_childedge where sortk = "m|A#G#:G""#
     // ===============================
     //let _parent_edge = "SELECT Uid FROM Edge_test order by cnt desc"
-    let child_edge = r#"select distinct puid from test_childedge where sortk = "m|A#G#:G""#
+    let _parent_edge = r#"select distinct puid from test_childedge where sortk = "m|A#G#:G""#
         .with(())
         .map(&mut conn, |puid| parent_node.push(puid))
         .await?;
@@ -294,7 +294,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
     println!("About to SQL");
     let mut parent_edges: HashMap<Puid, HashMap<SortK, Vec<Cuid>>> = HashMap::new();
 
-    let child_edge = "Select puid,sortk,cuid from test_childedge order by puid,sortk"
+    let _child_edge = "Select puid,sortk,cuid from test_childedge order by puid,sortk"
         .with(())
         .map(&mut conn, |(puid, sortk, cuid): (Uuid, String, Uuid)| {
             // this version requires no allocation (cloning) of sortk
@@ -359,8 +359,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
         let graph_sn = graph_prefix_wdot.trim_end_matches('.').to_string();
         let node_types = node_types.clone(); // Arc instance - single cache in heap storage
         let cache = reverse_edge_cache.clone();
-        let persist_query_ch  = persist_query_ch_p.clone();
-        let lru_ch = lru_ch_p.clone();
         let waits = waits.clone();
 
         tasks += 1; // concurrent task counter
@@ -395,12 +393,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
                     waits.clone(),
                 )
                 .await;
-                // +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-                // used for testing only - comment out this if when not testing
-                // +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-                if p_node_ty.short_nm() != "Fm" {
-                    break;
-                }
                 // +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
                 ovb_pk.insert(p_sk_edge.clone(), ovbs);
 
@@ -604,9 +596,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
                     retry_ch.clone(),
                     ovb_pk,
                     items,
-                    persist_query_ch.clone(),
                     //
-                    lru_ch.clone(),
                     waits.clone(),
                 )
                 .await;
@@ -684,7 +674,7 @@ async fn persist(
     ,dyn_client: &DynamoClient
     ,table_name: &str
     //
-    ,cache: Arc<tokio::sync::Mutex<cache::Cache::<RKey,RNode>>>
+    ,cache: Cache<RKey,RNode>
     //
     ,mut bat_w_req: Vec<WriteRequest>
     ,add_rvs_edge: bool
@@ -696,17 +686,11 @@ async fn persist(
     ,ovb_pk: HashMap<String, Vec<Uuid>>
     ,items: HashMap<SortK, Operation>
     //
-    ,persist_query_ch: tokio::sync::mpsc::Sender<QueryMsg<RKey>>
-    //
-    ,lru_ch : tokio::sync::mpsc::Sender<(usize, RKey, Instant, tokio::sync::mpsc::Sender<bool>, lru::LruAction)>
-    //
     ,waits : service::stats::Waits
 ) {
     // create channels to communicate (to and from) lru eviction service
     // evict_resp_ch: sender - passed to eviction service so it can send its response back to this routine
     // evict_recv_ch: receiver - used by this routine to receive respone from eviction service
-    let (persist_client_send_ch, mut persist_srv_resp_rx) = tokio::sync::mpsc::channel::<bool>(1);
-
     // persist to database
     for (sk, v) in items {
         match v {
@@ -804,18 +788,11 @@ async fn persist(
                             , dyn_client
                             , table_name
                             //
-                            ,lru_ch.clone()
-                            //
                             ,cache.clone()
-                            //
-                            , persist_query_ch.clone()
-                            , persist_client_send_ch.clone()
-                            , &mut persist_srv_resp_rx
                             //
                             , &target_uid
                             , id          
-                            , waits.clone())
-                            .await;
+                        ).await;
                     }
                 }
 
@@ -927,18 +904,11 @@ async fn persist(
                                     , dyn_client
                                     , table_name
                                     //
-                                    ,lru_ch.clone()
-                                    //
                                     ,cache.clone()
                                     //
-                                    , persist_query_ch.clone()
-                                    , persist_client_send_ch.clone()
-                                    , &mut persist_srv_resp_rx
-                                    //
                                     , &ovb
-                                    , id                     
-                                    , waits.clone())
-                                    .await;
+                                    , id           
+                                ).await;
                             }
                         }
                     }
@@ -1039,18 +1009,11 @@ async fn persist(
                                     , dyn_client
                                     , table_name
                                     //
-                                    ,lru_ch.clone()
-                                    //
                                     ,cache.clone()
-                                    //
-                                    , persist_query_ch.clone()
-                                    , persist_client_send_ch.clone()
-                                    , &mut persist_srv_resp_rx
                                     //
                                     , &ovb
                                     , id          
-                                    , waits.clone())
-                                    .await;
+                                ).await;
 
                             } //unlock cache and edgeItem locks
                         }

@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::u128;
 
 use tokio::time::{Duration, Instant};
@@ -32,7 +31,7 @@ pub enum Event {
     LruEvictCacheLock
 }
 
-#[derive(Clone)]
+#[derive(Clone,Debug)]
 pub struct Waits{
     record_ch: tokio::sync::mpsc::Sender<(Event, Duration, Duration)>,
     record_dur: Instant,

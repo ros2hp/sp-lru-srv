@@ -1,6 +1,5 @@
 use crate::cache::Cache;
 use crate::cache::Persistence;
-use crate::types;
 
 use crate::service::stats::{Waits,Event};
 use crate::QueryMsg;
@@ -74,12 +73,14 @@ impl<K> QueryClient<K> {
 // }
 
 pub fn start_service<K,V>(
+    mut cache: Cache<K,V>,
     dynamo_client: DynamoClient,
     table_name_: impl Into<String>,
     // channels
     mut submit_rx: tokio::sync::mpsc::Receiver<(K, Arc<Mutex<V>>, tokio::sync::mpsc::Sender<bool>)>,
     mut client_query_rx: tokio::sync::mpsc::Receiver<QueryMsg<K>>,
     mut shutdown_ch: tokio::sync::broadcast::Receiver<u8>,
+    //
     waits_ : Waits,
 ) -> task::JoinHandle<()> 
 where K: Clone + std::fmt::Debug + std::cmp::Eq + std::hash::Hash + std::marker::Send + std::marker::Sync + 'static, 
@@ -115,19 +116,20 @@ where K: Clone + std::fmt::Debug + std::cmp::Eq + std::hash::Hash + std::marker:
                 //biased;         // removes random number generation - normal processing will determine order so select! can follow it.
                 // note: recv() is cancellable, meaning select! can cancel a recv() without loosing data in the channel.
                 // select! will be forced to cancel recv() if another branch event happens e.g. recv() on shutdown_channel.
-                Some((K, arc_node, client_ch )) = submit_rx.recv() => {
+                Some((key, arc_node, client_ch )) = submit_rx.recv() => {
 
                     //  no locks acquired  - apart from Cache in async routine, which is therefore safe.
 
                         // persisting_lookup arc_node for given K
-                        persisting_lookup.0.insert(K.clone(), arc_node.clone());
-
-                        println!("PERSIST: submit persist for {:?} tasks [{}]",K, tasks);
+                        println!("PERSIST: submit persist for {:?} tasks [{}]",key, tasks);
+                        persisting_lookup.0.insert(key.clone(), arc_node.clone());
+                        cache.0.lock().await.set_persisting(key.clone());
+                        println!("PERSIST : cache set_persisting done :  key {:?}  tasks {}", key, tasks);
     
                         if tasks >= MAX_PRESIST_TASKS {
                             // maintain a FIFO of evicted nodes
-                            println!("PERSIST: submit - max tasks reached add {:?} pending_q {}",K, pending_q.0.len());
-                            pending_q.0.push_front(K.clone());                         
+                            println!("PERSIST: submit - max tasks reached add {:?} pending_q {}",key, pending_q.0.len());
+                            pending_q.0.push_front(key.clone());                         
     
                         } else {
                             // ==============================================
@@ -171,8 +173,8 @@ where K: Clone + std::fmt::Debug + std::cmp::Eq + std::hash::Hash + std::marker:
                     
                     println!("PERSIST : completed msg:  key {:?}  tasks {}", persist_K, tasks);
                     persisting_lookup.0.remove(&persist_K);
-
-                    
+                    cache.0.lock().await.unset_persisting(&persist_K);
+                    println!("PERSIST : cache unset_persisting done :  key {:?}  tasks {}", persist_K, tasks);
                     // send ack to client if one is waiting on query channel
                     //println!("PERSIST : send complete persist ACK to client - if registered. {:?}",persist_K);
                     if let Some(client_ch) = query_client.0.get(&persist_K) {
