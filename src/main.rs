@@ -141,11 +141,11 @@ enum Operation {
 }
 
 // Message sent on Evict Queued Channel
-struct QueryMsg<K>(K, tokio::sync::mpsc::Sender<bool>);
+struct QueryMsg<K>(K, tokio::sync::mpsc::Sender<bool>, usize);
 
 impl<K> QueryMsg<K>{
-    fn new(rkey: K, resp_ch: tokio::sync::mpsc::Sender<bool>) -> Self {
-        QueryMsg(rkey, resp_ch)
+    fn new(rkey: K, resp_ch: tokio::sync::mpsc::Sender<bool>, task: usize) -> Self {
+        QueryMsg(rkey, resp_ch, task)
     }
 }
 
@@ -223,8 +223,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
     // 3. allocate Reverse Cache and LRU 
     // ================================================
     let (persist_query_ch_p, persist_query_rx) = tokio::sync::mpsc::channel::<QueryMsg<RKey>>(MAX_SP_TASKS * 2); 
-    let (lru_persist_submit_ch, persist_submit_rx) = tokio::sync::mpsc::channel::<(RKey, Arc<Mutex<RNode>>, tokio::sync::mpsc::Sender<bool>)>(MAX_SP_TASKS);
-    let (lru_ch_p, lru_operation_rx) = tokio::sync::mpsc::channel::<(RKey, Instant,tokio::sync::mpsc::Sender<bool>, lru::LruAction)>(MAX_SP_TASKS+1);
+    let (lru_persist_submit_ch, persist_submit_rx) = tokio::sync::mpsc::channel::<(usize, RKey, Arc<Mutex<RNode>>, tokio::sync::mpsc::Sender<bool>)>(MAX_SP_TASKS);
+    let (lru_ch_p, lru_operation_rx) = tokio::sync::mpsc::channel::<(usize, RKey, Instant,tokio::sync::mpsc::Sender<bool>, lru::LruAction)>(MAX_SP_TASKS+1);
    
     let reverse_edge_cache = Cache::<RKey, RNode>::new(persist_query_ch_p.clone(),lru_ch_p.clone(),waits.clone()); 
     // =====================

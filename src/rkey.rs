@@ -28,25 +28,28 @@ impl RKey {
         //println!("{} ------------------------------------------------ {:?}",task, self);
         println!("{} RKEY add_reverse_edge: about to get  {:?} ",task, self);
 
-        match cache.clone().get(&self).await {
+        match cache.clone().get(&self, task).await {
 
             CacheValue::New(node) => {
-                println!("{} RKEY add_reverse_edge: New   {:?} ",task, self);
 
-                let mut rnode_guard = node.lock().await;
+                println!("{} RKEY add_reverse_edge: New  1 {:?} ",task, self);
+                let mut node_guard = node.lock().await;
                               
-                rnode_guard.load_ovb_metadata(dyn_client, table_name, self, task).await;
-                rnode_guard.add_reverse_edge(target.clone(), id as u32);
-                println!("{} RKEY add_reverse_edge: New   about to cache.unlock {:?} ",task, self);
+                node_guard.load_ovb_metadata(dyn_client, table_name, self, task).await;
+                node_guard.add_reverse_edge(target.clone(), id as u32);
+                println!("{} RKEY add_reverse_edge: New  2 about to cache.unlock {:?} ",task, self);
+                
                 cache.unlock(&self).await;
-
             }
 
             CacheValue::Existing(node) => {
-                println!("{} RKEY add_reverse_edge: Existing   {:?} ",task, self);
-                let mut rnode_guard = node.lock().await;
-                rnode_guard.add_reverse_edge(target.clone(), id as u32);
-                println!("{} RKEY add_reverse_edge: Existing   about to cache.unlock {:?} ",task, self);
+
+                println!("{} RKEY add_reverse_edge: Existing  1 {:?} ",task, self);
+                let mut node_guard = node.lock().await;
+
+                node_guard.add_reverse_edge(target.clone(), id as u32);
+                println!("{} RKEY add_reverse_edge: Existing  2 about to cache.unlock {:?} ",task, self);
+                
                 cache.unlock(&self).await;
             }
         }

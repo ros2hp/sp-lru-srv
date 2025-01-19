@@ -209,10 +209,11 @@ impl Persistence<RKey> for RNode {
 
     async fn persist(
         &mut self,
+        task : usize, 
         dyn_client: &DynamoClient,
         table_name_: String,
         waits : Waits,
-        persist_completed_send_ch: tokio::sync::mpsc::Sender<RKey>,
+        persist_completed_send_ch: tokio::sync::mpsc::Sender<(RKey, usize)>,
     )
 {
             // at this point, cache is source-of-truth updated with db values if edge exists.
@@ -446,13 +447,13 @@ impl Persistence<RKey> for RNode {
             }
         
             // send task completed msg to persist service
-            if let Err(err) = persist_completed_send_ch.send(rkey.clone()).await {
+            if let Err(err) = persist_completed_send_ch.send((rkey.clone(),task) ).await {
                 println!(
                     "Sending completed persist msg to waiting client failed: {}",
                     err
                 );
             }
-            println!("*PERSIST  Exit    {:?}",rkey);
+            println!("{} *PERSIST  Exit    {:?}",task, rkey);
             ()
     }
 }
