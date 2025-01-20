@@ -7,7 +7,7 @@ use std::hash::Hash;
 use std::cmp::Eq;
 use std::fmt::Debug;
 use std::collections::HashMap;
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
 use tokio::time::{sleep, Duration, Instant};
 use tokio::sync::Mutex;
@@ -23,7 +23,7 @@ pub enum LruAction {
 struct Entry<K: Hash + Eq + Debug>{
     pub key: K,
     //
-    pub next: Option<Arc<Mutex<Entry<K>>>>,  // TODO: as LRU is a service and Entry is local to service remove Mutex and Arc
+    pub next: Option<Arc<Mutex<Entry<K>>>>,  // TODO: as LRU is a service and Entry is local to service remove Mutex and Arc. NO - DOESN'T WORK.
     pub prev: Option<Arc<Mutex<Entry<K>>>>,
 }
 
@@ -297,7 +297,6 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
         &mut self,
         task : usize,
         key: K,
-        mut cache: Cache<K,V>,
     ) {  
          {
         //println!("--------------");
@@ -411,7 +410,7 @@ pub fn start_service<K:std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone 
                             }
                             LruAction::Move_to_head => {
                                 println!("{} LRU delay {:?} LRU: action move_to_head {:?}", Instant::now().duration_since(sent_time).as_nanos(), task, key);
-                                lru_evict.move_to_head( task, key, cache.clone()).await;
+                                lru_evict.move_to_head( task, key).await;
                             }
                         }
                         // send response back to client...sync'd.
