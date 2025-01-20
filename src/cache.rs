@@ -5,7 +5,7 @@ use std::cmp::Eq;
 use std::fmt::Debug;
 use std::collections::HashSet;
 
-use tokio::time::{Sleep,Duration};
+//use tokio::time::{Sleep,Duration};
 
 use service::lru::LruAction;
 // let (persist_completed_send_ch, mut persist_completed_rx) =
@@ -32,6 +32,15 @@ pub trait Persistence_<K> {
         ,waits : Waits
         ,persist_completed_send_ch : tokio::sync::mpsc::Sender<(K, usize)>
     );
+}
+
+// Message sent on Evict Queued Channel
+pub struct QueryMsg<K>(pub K, pub tokio::sync::mpsc::Sender<bool>, pub usize);
+
+impl<K> QueryMsg<K>{
+    fn new(rkey: K, resp_ch: tokio::sync::mpsc::Sender<bool>, task: usize) -> Self {
+        QueryMsg(rkey, resp_ch, task)
+    }
 }
 
 pub trait NewValue<K: Clone,V> {
@@ -90,22 +99,22 @@ impl<K : Hash + Eq + Debug + Clone, V: Persistence<K> + Clone + Debug>  Cache<K,
 impl<K : Hash + Eq + Debug + Clone,V>  InnerCache<K,V>
 {
     pub fn unlock(&mut self, key: &K) {
-        println!("InnerCache unlock [{:?}]",key);
+        //println!("InnerCache unlock [{:?}]",key);
         self.unset_inuse(key);
     }
 
     pub fn set_inuse(&mut self, key: K) {
-        println!("InnerCache set_inuse [{:?}]",key);
+        //println!("InnerCache set_inuse [{:?}]",key);
         self.inuse.entry(key.clone()).and_modify(|i|*i+=1).or_insert(1);
     }
 
     pub fn unset_inuse(&mut self, key: &K) {
-        println!("InnerCache unset_inuse [{:?}]",key);
+        //println!("InnerCache unset_inuse [{:?}]",key);
         self.inuse.entry(key.clone()).and_modify(|i|*i-=1);
     }
 
     pub fn inuse(&self, key: &K) -> bool {
-        println!("InnerCache inuse [{:?}]",key);
+        //println!("InnerCache inuse [{:?}]",key);
         match self.inuse.get(key) {
             None => false,
             Some(i) => {*i > 0},
@@ -173,7 +182,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Persistence<K> + Clone + NewValue<K,V> + D
                 // ===============================================================
                 // serialise access to value - prevents concurrent operations on key
                 // ===============================================================                
-                let _ = arc_value.lock().await;
+                let value_guard = arc_value.lock().await;
                 // ============================================================================================================
                 // release cache lock with value still locked - value now in cache, so next get on key will go to in-cache path
                 // ============================================================================================================
@@ -216,7 +225,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Persistence<K> + Clone + NewValue<K,V> + D
                 // =============================================
                 // serialise processing on concurrent key-value
                 // =============================================
-                let _ = arc_value.lock().await;
+                let value_guard = arc_value.lock().await;
                 // ======================
                 // IS NODE persisting 
                 // ======================
@@ -225,7 +234,6 @@ impl<K: Hash + Eq + Clone + Debug, V: Persistence<K> + Clone + NewValue<K,V> + D
                     self.wait_for_persist_to_complete(task, key.clone(),persist_query_ch, waits.clone()).await;       
                 } 
 
-                println!("{} CACHE key: in cache:  {:?}", task, key);
                 before =Instant::now();    
                 if let Err(err) = lru_ch.send((task, key.clone(), before, lru_client_ch, LruAction::Move_to_head)).await {
                     panic!("Send on lru_move_to_head_ch failed {}",err)
@@ -249,7 +257,6 @@ impl<K: Hash + Eq + Clone + Debug, V: Persistence<K> + Clone + NewValue<K,V> + D
         let (persist_client_send_ch, mut persist_srv_resp_rx) = tokio::sync::mpsc::channel::<bool>(1);
         // wait for evict service to give go ahead...(completed persisting)
         // or ack that it completed already.
-        println!("{} CACHE: wait_for_persist_to_complete entered...{:?}",task, key);
         let mut before:Instant =Instant::now();
         if let Err(e) = persist_query_ch
                                 .send(QueryMsg::new(key.clone(), persist_client_send_ch.clone(),task))
@@ -261,7 +268,6 @@ impl<K: Hash + Eq + Clone + Debug, V: Persistence<K> + Clone + NewValue<K,V> + D
 
         // wait for persist to complete
         before =Instant::now();
-        println!("{} CACHE: wait_for_persist_to_complete entered...wait for persist resp...{:?}",task,key);
         let persist_resp = match persist_srv_resp_rx.recv().await {
                     Some(resp) => resp,
                     None => {
@@ -281,7 +287,6 @@ impl<K: Hash + Eq + Clone + Debug, V: Persistence<K> + Clone + NewValue<K,V> + D
                     persist_srv_resp_rx.recv().await;
                     waits.record(Event::ChanPersistWait,Instant::now().duration_since(before)).await;
                 }
-        println!("{} CACHE: wait_for_persist_to_complete entered...EXIT {:?}",task, key);
     }
 }
 

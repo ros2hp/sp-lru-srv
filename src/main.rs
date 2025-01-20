@@ -5,6 +5,7 @@ mod cache;
 mod service;
 mod types;
 use crate::service::stats::{Waits, Event};
+use crate::cache::QueryMsg;
 
 use std::collections::HashMap;
 use std::env;
@@ -140,14 +141,6 @@ enum Operation {
     Propagate(PropagateScalar),
 }
 
-// Message sent on Evict Queued Channel
-struct QueryMsg<K>(K, tokio::sync::mpsc::Sender<bool>, usize);
-
-impl<K> QueryMsg<K>{
-    fn new(rkey: K, resp_ch: tokio::sync::mpsc::Sender<bool>, task: usize) -> Self {
-        QueryMsg(rkey, resp_ch, task)
-    }
-}
 
 #[::tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>> {

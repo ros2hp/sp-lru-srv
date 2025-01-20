@@ -2,7 +2,7 @@ use crate::cache::Cache;
 use crate::cache::Persistence;
 
 use crate::service::stats::Waits;
-use crate::QueryMsg;
+use crate::cache::QueryMsg;
 
 use std::collections::{HashMap,  VecDeque};
 
@@ -144,7 +144,6 @@ where K: Clone + std::fmt::Debug + std::cmp::Eq + std::hash::Hash + std::marker:
                             
                             tasks+=1;
     
-                            println!("{} PERSIST: submit ASYNC 3 call to persist_V tasks {}",task, tasks);
                             tokio::spawn(async move {
     
                                 // save Node data to db
@@ -158,7 +157,6 @@ where K: Clone + std::fmt::Debug + std::cmp::Eq + std::hash::Hash + std::marker:
     
                             });
                         }
-                        println!("{} PERSIST: submit - send response",task);
                         if let Err(err) = client_ch.send(true).await {
                             panic!("Error in sending query_msg [{}]",err)
                         };
@@ -180,12 +178,10 @@ where K: Clone + std::fmt::Debug + std::cmp::Eq + std::hash::Hash + std::marker:
                         // send ack of completed persistion to waiting client
                         loop {
                             if let Some(v) = client_chs.pop_front() {
-                                println!("{} PERSIST :   ABOUT to send ACK to query client that persist completed ",task);
                                 if let Err(err) = v.send(true).await {
                                     panic!("Error in sending to waiting client that K is evicited [{}]",err)
                                 }
-                                println!("{} PERSIST :   sleep before next send msg to client ",task);
-                                sleep(Duration::from_millis(10)).await;
+                                //sleep(Duration::from_millis(10)).await;
                             } else {
                                 break
                             }
