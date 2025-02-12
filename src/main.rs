@@ -141,6 +141,44 @@ enum Operation {
     Propagate(PropagateScalar),
 }
 
+// pub struct Dynamo<T> {
+//     pub  conn : T,
+//     pub table_name : String
+// }
+
+#[derive(Clone)]
+pub struct Dynamo {
+    pub  conn : DynamoClient,
+    pub table_name : String
+}
+
+impl Dynamo {
+    fn new(conn: DynamoClient, table_name: impl ToString) -> Self {
+        Dynamo{conn, table_name: table_name.to_string()}
+    }
+}
+
+// impl<DynamoClient> DB for Dynamo<DynamoClient> {
+//     fn get_conn(&self) -> DynamoClient {
+//         self.conn
+//     }
+//     fn get_table_name(&self) -> String {
+//         self.table_name
+//     }
+// }
+
+// impl DB for Dynamo {
+
+//     type conn_str = DynamoClient;
+
+//     fn get_conn(&self) -> DynamoClient {
+//          self.conn.clone()
+//     }
+//     fn get_table_name(&self) -> String {
+//         self.table_name.clone()
+//     }
+// }
+
 
 #[::tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>> {
@@ -239,11 +277,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
     // * shutdown
     let persist_shutdown_ch = shutdown_broadcast_sender.subscribe();
     println!("start persist service...");
+    let db = Dynamo::new(dynamo_client.clone(),table_name.to_string());
     // 
-    let persist_service = service::persist::start_service::<RKey,RNode>(
+    let persist_service = service::persist::start_service::<RKey,RNode,Dynamo>(
         reverse_edge_cache.clone(),
-        dynamo_client.clone(),
-        table_name,
+        db,
         persist_submit_rx,
         persist_query_rx,
         persist_shutdown_ch,

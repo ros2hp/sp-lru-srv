@@ -1,19 +1,12 @@
 use crate::cache::Cache;
 use crate::cache::Persistence;
-
 use crate::service::stats::Waits;
 use crate::cache::QueryMsg;
 
 use std::collections::{HashMap,  VecDeque};
-
 use std::sync::Arc;
 
-//
-use aws_sdk_dynamodb::Client as DynamoClient;
-
-
 use tokio::task;
-use tokio::time::{sleep, Duration};
 use tokio::sync::Mutex;
 
 const MAX_PRESIST_TASKS: u8 = 8;
@@ -72,10 +65,9 @@ impl<K> QueryClient<K> {
 //     }
 // }
 
-pub fn start_service<K,V>(
-    mut cache: Cache<K,V>,
-    dynamo_client: DynamoClient,
-    table_name_: impl Into<String>,
+pub fn start_service<K,V,D>(
+    cache: Cache<K,V>,
+    db : D,
     // channels
     mut submit_rx: tokio::sync::mpsc::Receiver<(usize, K, Arc<Mutex<V>>, tokio::sync::mpsc::Sender<bool>)>,
     mut client_query_rx: tokio::sync::mpsc::Receiver<QueryMsg<K>>,
@@ -83,15 +75,16 @@ pub fn start_service<K,V>(
     //
     waits_ : Waits,
 ) -> task::JoinHandle<()> 
-where K: Clone + std::fmt::Debug + std::cmp::Eq + std::hash::Hash + std::marker::Send + std::marker::Sync + 'static, 
-      V: Clone + Persistence<K> + std::marker::Send + std::marker::Sync + 'static 
+where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static, 
+      V: Clone + Persistence<K,D> + std::fmt::Debug +  'static,
+      D: Send + Clone + 'static
 {
 
-    let table_name = table_name_.into();
+    //let table_name = table_name_.into();
 
     //let mut start = Instant::now();
 
-    println!("PERSIST  starting persist service: table [{}] ", table_name);
+    println!("PERSIST  starting persist service: table ");
 
     //let mut persisted = Persisted::new(); // temmporary - initialise to zero ovb metadata when first persisted
     let mut persisting_lookup = Lookup::new();
@@ -103,13 +96,11 @@ where K: Clone + std::fmt::Debug + std::cmp::Eq + std::hash::Hash + std::marker:
     let (persist_completed_send_ch, mut persist_completed_rx) =
         tokio::sync::mpsc::channel::<(K,usize)>(MAX_PRESIST_TASKS as usize);
 
-    //let backoff_queue : VecDeque = VecDeque::new();
-    let dyn_client = dynamo_client.clone();
-    let tbl_name = table_name.clone();
     let waits = waits_.clone();
 
     // persist service only handles
     let persist_server = tokio::spawn(async move {
+
         loop {
             //let persist_complete_send_ch_=persist_completed_send_ch.clone();
             tokio::select! {
@@ -137,10 +128,9 @@ where K: Clone + std::fmt::Debug + std::cmp::Eq + std::hash::Hash + std::marker:
 
                             let mut node_guard=node_guard_.clone();
                             // spawn async task to persist node
-                            let dyn_client_ = dyn_client.clone();
-                            let tbl_name_ = tbl_name.clone();
                             let persist_complete_send_ch_=persist_completed_send_ch.clone();
                             let waits=waits.clone();
+                            let db=db.clone();
                             
                             tasks+=1;
     
@@ -149,8 +139,7 @@ where K: Clone + std::fmt::Debug + std::cmp::Eq + std::hash::Hash + std::marker:
                                 // save Node data to db
                                 node_guard.persist(
                                     task
-                                    ,&dyn_client_
-                                    ,tbl_name_
+                                    ,db
                                     ,waits
                                     ,persist_complete_send_ch_
                                 ).await;
@@ -168,13 +157,12 @@ where K: Clone + std::fmt::Debug + std::cmp::Eq + std::hash::Hash + std::marker:
 
                     tasks-=1;
                     
-                    println!("{} PERSIST : completed msg:  key {:?}  tasks {}", task, persist_key, tasks);
+                    //println!("{} PERSIST : completed msg:  key {:?}  tasks {}", task, persist_key, tasks);
                     persisting_lookup.0.remove(&persist_key);
                     cache.0.lock().await.unset_persisting(&persist_key);
 
                     // send ack to waiting client 
                     if let Some(client_chs) = query_client.0.get_mut(&persist_key) {
-                        println!("{} PERSIST :   send ACK to each persist query client : len vecdeque {} ",task, client_chs.len());
                         // send ack of completed persistion to waiting client
                         loop {
                             if let Some(v) = client_chs.pop_front() {
@@ -188,20 +176,16 @@ where K: Clone + std::fmt::Debug + std::cmp::Eq + std::hash::Hash + std::marker:
                         }
                         //
                         query_client.0.remove(&persist_key);
-                        //println!("PERSIST  EVIct: ABOUT to send ACK to query that persist completed - DONE");
                     }
-                    //println!("PERSIST  EVIct: is client waiting..- DONE ");
                     // // process next node in persist Pending Queue
                     if let Some(queued_Key) = pending_q.0.pop_back() {
-                        println!("{} PERSIST : persist next entry in pending_q.... {:?}", task, queued_Key);
+                        //println!("{} PERSIST : persist next entry in pending_q.... {:?}", task, queued_Key);
                         // spawn async task to persist node
-                        let dyn_client_ = dyn_client.clone();
-                        let tbl_name_ = tbl_name.clone();
                         let persist_complete_send_ch_=persist_completed_send_ch.clone();
-                        println!("{} PERSIST: start persist task from pending_q. {:?} tasks {} queue size {}",task, queued_Key, tasks, pending_q.0.len() );
 
                         let Some(arc_node_) = persisting_lookup.0.get(&queued_Key) else {panic!("Persist service: expected arc_node in Lookup {:?}",queued_Key)};
                         let arc_node=arc_node_.clone();
+                        let db=db.clone();
                         let waits=waits.clone();
                         let mut node_guard = arc_node_.lock().await.clone();
                         //let persisted_=persisted.clone();
@@ -211,20 +195,19 @@ where K: Clone + std::fmt::Debug + std::cmp::Eq + std::hash::Hash + std::marker:
                             // save Node data to db
                             node_guard.persist(
                                 task
-                                ,&dyn_client_
-                                ,tbl_name_
+                                ,db
                                 ,waits
                                 ,persist_complete_send_ch_
                             ).await;
                         });
                     }
-                    println!("{} PERSIST finished completed msg:  key {:?}  tasks {} ", task, persist_key, tasks);
+                    //println!("{} PERSIST finished completed msg:  key {:?}  tasks {} ", task, persist_key, tasks);
                 },
 
                 Some(query_msg) = client_query_rx.recv() => {
 
                     // ACK to client whether node is marked evicted
-                    println!("{} PERSIST : client query for {:?}",query_msg.2, query_msg.0);
+                    //println!("{} PERSIST : client query for {:?}",query_msg.2, query_msg.0);
                     if let Some(_) = persisting_lookup.0.get(&query_msg.0) {
                         // register for notification of persist completion.
                         query_client.0
@@ -243,7 +226,6 @@ where K: Clone + std::fmt::Debug + std::cmp::Eq + std::hash::Hash + std::marker:
                         
                     } else {
                         
-                        println!("{} PERSIST : send ACK (false) to client {:?}",query_msg.2,query_msg.0);
                         // send ACK (false) to client 
                         if let Err(err) = query_msg.1.send(false).await {
                             panic!("Error in sending query_msg [{}]",err)
@@ -257,7 +239,6 @@ where K: Clone + std::fmt::Debug + std::cmp::Eq + std::hash::Hash + std::marker:
                 _ = shutdown_ch.recv() => {
                         println!("PERSIST shutdown:  Waiting for remaining persist tasks [{}] pending_q {} to complete...",tasks as usize, pending_q.0.len());
                         while tasks > 0 || pending_q.0.len() > 0 {
-                            println!("PERSIST  ...waiting on {} tasks",tasks);
                             if tasks > 0 {
                                 let Some(persist_key) = persist_completed_rx.recv().await else {panic!("Inconsistency; expected task complete msg got None...")};
                                 tasks-=1;
@@ -275,27 +256,21 @@ where K: Clone + std::fmt::Debug + std::cmp::Eq + std::hash::Hash + std::marker:
                                 }
                             }
                             if let Some(queued_Key) = pending_q.0.pop_back() {
-                                //println!("PERSIST : persist next entry in pending_q....");
-                                // spawn async task to persist node
-                                let dyn_client_ = dyn_client.clone();
-                                let tbl_name_ = tbl_name.clone();
+  
                                 let persist_complete_send_ch_=persist_completed_send_ch.clone();
                                 let Some(arc_node_) = persisting_lookup.0.get(&queued_Key) else {panic!("Persist service: expected arc_node in Lookup")};
-                                let arc_node=arc_node_.clone();
                                 let waits=waits.clone();
                                 let mut node_guard= arc_node_.lock().await.clone();
-                                //let persisted_=persisted.clone();
+                                let db=db.clone();
                                 tasks+=1;
 
-
-                                println!("PERSIST: shutdown  persist task tasks {} Pending-Q {}", tasks, pending_q.0.len() );
+                                //println!("PERSIST: shutdown  persist task tasks {} Pending-Q {}", tasks, pending_q.0.len() );
                                 // save Node data to db
                                 tokio::spawn(async move {
                                     // save Node data to db
                                     node_guard.persist(
                                         0
-                                        ,&dyn_client_
-                                        ,tbl_name_
+                                        ,db
                                         ,waits
                                         ,persist_complete_send_ch_
                                     ).await;
@@ -303,9 +278,7 @@ where K: Clone + std::fmt::Debug + std::cmp::Eq + std::hash::Hash + std::marker:
                             }
                         }
                         println!("PERSIST  shutdown completed. Tasks {}",tasks);
-                        // if let Err(err) = client_ch.send(()).await {
-                        //     panic!("Error in sending client_ch [{}]",err)
-                        // };  
+
                         break;
                 },
             }

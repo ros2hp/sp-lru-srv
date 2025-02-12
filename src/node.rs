@@ -92,7 +92,7 @@ impl RNode {
         }
         let ri: RNode = match result.unwrap().item {
             None =>  return,
-            Some(v) => v.into(),
+            Some(v) => v.into(), //  {(RNode as From)::from(v)} , //  uses trait: Into<RNode> { fn into(self)-> RNode}
         };
         // update self with db data
         self.init_cnt = ri.init_cnt;
@@ -205,13 +205,12 @@ impl NewValue<RKey,RNode> for RNode {
     }
 }
 
-impl Persistence<RKey> for RNode {
+impl Persistence<RKey, Dynamo> for RNode {
 
     async fn persist(
         &mut self,
         task : usize, 
-        dyn_client: &DynamoClient,
-        table_name_: String,
+        db: Dynamo,
         waits : Waits,
         persist_completed_send_ch: tokio::sync::mpsc::Sender<(RKey, usize)>,
     )
@@ -219,7 +218,8 @@ impl Persistence<RKey> for RNode {
             // at this point, cache is source-of-truth updated with db values if edge exists.
             // use db cache values to decide nature of updates to db
             // Note for LIST_APPEND Dynamodb will scan the entire attribute value before appending, so List should be relatively small < 10000.
-            let table_name: String = table_name_.clone();
+            let table_name: String = db.table_name; 
+            let dyn_client = db.conn;
             let mut target_uid: Vec<AttributeValue>;
             let mut target_id: Vec<AttributeValue>;
             let mut update_expression: &str;

@@ -131,7 +131,11 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
         }
         println!("*** print LRU chain DONE ***");
     }
-    
+
+}
+impl<K,V> LRUevict<K,V> 
+where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker::Send, V:  Clone + Debug
+{    
     // prerequisite - lru_entry has been confirmed NOT to be in lru-cache.
     // note: can only execute methods on LRUevict if lock has been acquired via Arc<Mutex<LRU>>
     async fn attach(
@@ -186,7 +190,6 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                     // ============================
                     // remove node from cache
                     // ============================
-                    println!("{} LRU attach evict - XXXXXXXXXXXXX  remove from Cache {:?}", task, evict_entry.key);
                     cache_guard.datax.remove(&evict_entry.key);   
                     // ===================================
                     // detach evict entry from tail of LRU
@@ -378,7 +381,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
 }
 
 
-pub fn start_service<K:std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker::Send + std::marker::Sync + 'static, V: std::marker::Send + std::marker::Sync + 'static >
+pub fn start_service<K:std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker::Send + std::marker::Sync + 'static, V: std::marker::Send + std::marker::Sync + Clone + std::fmt::Debug + 'static>
 (        lru_capacity : usize
         ,mut cache: Cache<K,V>
         //

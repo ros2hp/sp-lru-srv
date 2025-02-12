@@ -4,31 +4,21 @@ use std::hash::Hash;
 use std::cmp::Eq;
 use std::fmt::Debug;
 use std::collections::HashSet;
-
-//use tokio::time::{Sleep,Duration};
-
 use service::lru::LruAction;
-// let (persist_completed_send_ch, mut persist_completed_rx) =
-// tokio::sync::mpsc::channel::<RKey>(MAX_PRESIST_TASKS as usize);
-
 use crate::service::stats::Waits;
-use aws_sdk_dynamodb::Client as DynamoClient;
-//use crate::rkey::RKey_New;
 
 pub enum CacheValue<V> {
     New(V),
     Existing(V),
 }
 
-
 #[trait_variant::make(Persistence: Send)]
-pub trait Persistence_<K> {
+pub trait Persistence_<K, D> {
 
     async fn persist(
         &mut self
         ,task : usize
-        ,dyn_client: &DynamoClient
-        ,table_name_: String
+        ,db : D
         ,waits : Waits
         ,persist_completed_send_ch : tokio::sync::mpsc::Sender<(K, usize)>
     );
@@ -56,7 +46,7 @@ pub trait NewValue<K: Clone,V> {
 // Each cache update will be saved to db to keep both in sync.
 // All mutations of the cache hashmap need to be serialized.
 #[derive(Debug)]
-pub struct InnerCache<K,V>{
+pub struct InnerCache<K,V> {
     pub datax : HashMap<K, Arc<tokio::sync::Mutex<V>>>,
     // channels
     persist_query_ch : tokio::sync::mpsc::Sender<QueryMsg<K>>,
@@ -73,7 +63,7 @@ pub struct InnerCache<K,V>{
 pub struct Cache<K,V>(pub Arc<Mutex<InnerCache<K,V>>>);
 
 
-impl<K : Hash + Eq + Debug + Clone, V: Persistence<K> + Clone + Debug>  Cache<K,V>
+impl<K : Hash + Eq + Debug + Clone, V:  Clone + Debug>  Cache<K,V>
 {
 
     pub fn new(
@@ -96,7 +86,7 @@ impl<K : Hash + Eq + Debug + Clone, V: Persistence<K> + Clone + Debug>  Cache<K,
     }
 }
 
-impl<K : Hash + Eq + Debug + Clone,V>  InnerCache<K,V>
+impl<K : Hash + Eq + Debug + Clone,V : Clone + Debug >  InnerCache<K,V>
 {
     pub fn unlock(&mut self, key: &K) {
         //println!("InnerCache unlock [{:?}]",key);
@@ -138,14 +128,14 @@ impl<K : Hash + Eq + Debug + Clone,V>  InnerCache<K,V>
 
 }
 
-impl<K,V> Clone for Cache<K,V> {
+impl<K,V> Clone for Cache<K,V> where K : Hash + Eq + Debug + Clone, V:  Clone + Debug {
 
     fn clone(&self) -> Self {
         Cache::<K,V>(self.0.clone())
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug, V: Persistence<K> + Clone + NewValue<K,V> + Debug>  Cache<K,V>
+impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V>
 {
 
     pub async fn unlock(&mut self, key: &K) {
